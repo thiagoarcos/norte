@@ -58,6 +58,60 @@ const TIPS = [
   "Pesarte siempre a la misma hora (al despertar) hace comparables los números.",
 ];
 
+/* ============ PLAN CUT ============
+   Basado en la guía "Cómo bajar de un 30 a un 8% de grasa (Guía completa)"
+   de Oswal Candela. 3 fases estilo videojuego: misiones diarias, XP y
+   calculadoras que se desbloquean al avanzar de fase.               */
+const CUT_VIDEO_URL = "https://www.youtube.com/watch?v=mce1xrWLV1E";
+
+const CUT_PHASES = [
+  {
+    emoji: "🌱", name: "Base sólida", range: "hasta 15% de grasa", target: 15,
+    rules: [
+      "Déficit sin sufrir: apuntá a tu peso corporal × 22–24 kcal por día.",
+      "Proteína 1.5–2 g por kg de peso, todos los días.",
+      "Fuerza 3–5 veces por semana para proteger el músculo.",
+      "No hace falta ser perfecto: entra alguna comida libre.",
+      "Elegí comida que llena mucho con pocas calorías (verduras, carnes magras, papa, fruta).",
+    ],
+    unlock: "Calculadora rápida de calorías (peso × 22–24)",
+  },
+  {
+    emoji: "🎯", name: "Precisión", range: "15% → 12% de grasa", target: 12,
+    rules: [
+      "El conteo de calorías deja de ser opcional: pesá los alimentos y registrá todo.",
+      "Ultraprocesados casi en cero.",
+      "La grasa baja más lento acá: mirá promedios semanales, no días sueltos.",
+      "Constancia de semanas: el metabolismo se ajusta y hay que ser paciente.",
+    ],
+    unlock: "Calculadora completa de macros (Mifflin-St Jeor)",
+  },
+  {
+    emoji: "🔥", name: "Modo shredded", range: "12% → 8% de grasa", target: 8,
+    rules: [
+      "Precisión extrema entre lo que comés y lo que gastás.",
+      "Máxima densidad nutricional en cada comida.",
+      "Ayuno intermitente como herramienta opcional.",
+      "Eventos sociales: planificá qué vas a comer antes de ir.",
+      "Es la fase más dura: energía baja y más sacrificio psicológico son esperables.",
+    ],
+    unlock: "Herramientas de precisión (ayuno + control fino)",
+  },
+];
+
+const CUT_TIPS = [
+  "Fase 1: no hace falta ser estricto. Enfocate en proteína y déficit; lo perfecto viene después.",
+  "Regla rápida para definir: tu peso en kg × 22–24 = tus calorías del día.",
+  "Proteína 1.5–2 g/kg todos los días: es lo que salva tu músculo en el déficit.",
+  "Llenate con pocas calorías: verduras, papa, carnes magras y frutas ocupan mucho estómago.",
+  "En Fase 2 el conteo es obligatorio: pesá los alimentos y registrá todo en la app.",
+  "Reducí los ultraprocesados al máximo: gastan tus calorías sin llenarte.",
+  "¿La báscula baja más lento debajo del 15%? Es normal, no lo estás haciendo mal.",
+  "El cuerpo quema grasa en todo el cuerpo: el abdomen se marca al final (13–15% en hombres).",
+  "12–15% de grasa ya es un cuerpo estético, saludable y con vida social. El 8% es opcional.",
+  "Fase 3: cada caloría cuenta, hasta las 'probaditas'. Registrá absolutamente todo.",
+];
+
 /* ============ BASE DE EJERCICIOS POR MÚSCULO ============
    ratio = 1RM estimado / peso corporal para niveles
    [principiante, intermedio, avanzado]. null = aislamiento o
@@ -419,6 +473,7 @@ const initialState = {
   ],
   goals: { kcal: 2500, protein: 140, carbs: 300, fat: 80, water: 8 },
   customTips: [],
+  cut: null,
 };
 
 const STORAGE_KEY = "nexofit-state-v4";
@@ -885,7 +940,7 @@ export default function App() {
   const today = dstr();
   const todayDate = new Date();
   const dow = todayDate.getDay();
-  const allTips = [...(state.customTips || []), ...TIPS];
+  const allTips = [...(state.customTips || []), ...(state.cut ? CUT_TIPS : []), ...TIPS];
   const tip = allTips[dayOfYear() % allTips.length];
 
   useEffect(() => {
@@ -991,6 +1046,84 @@ export default function App() {
   const weightEntriesAll = Object.entries(state.weightLog).sort((a, b) => a[0].localeCompare(b[0]));
   const bodyWeight = weightEntriesAll.length ? Number(weightEntriesAll[weightEntriesAll.length - 1][1]) : 0;
 
+  /* ---------- Plan Cut ---------- */
+  const cut = state.cut;
+  const cutBfEntries = cut ? Object.entries(cut.bfLog || {}).sort((a, b) => a[0].localeCompare(b[0])) : [];
+  const cutBf = cutBfEntries.length ? Number(cutBfEntries[cutBfEntries.length - 1][1]) : cut ? Number(cut.startBf) : 0;
+  const cutPhaseIdx = cutBf > 15 ? 0 : cutBf > 12 ? 1 : 2;
+  const cutDone = !!cut && cutBf <= 8;
+  const cutPhase = CUT_PHASES[cutPhaseIdx];
+  const cutPhaseStartBf = cutPhaseIdx === 0 ? Math.max(Number(cut?.startBf) || 30, 15.5) : cutPhaseIdx === 1 ? 15 : 12;
+  const cutPhasePct = cut ? Math.min(1, Math.max(0, (cutPhaseStartBf - cutBf) / (cutPhaseStartBf - cutPhase.target))) : 0;
+  const cutManualToday = (cut && cut.manual && cut.manual[today]) || {};
+  const cutMissions = cut ? [
+    { id: "meal", auto: true, text: "Registrá tus comidas de hoy", done: mealsToday.length > 0 },
+    { id: "prot", auto: true, text: `Llegá a ${state.goals.protein} g de proteína`, done: prot >= state.goals.protein },
+    { id: "water", auto: true, text: "Completá tu meta de agua", done: water >= state.goals.water },
+    ...(exTotal > 0 ? [{ id: "train", auto: true, text: "Completá el entreno de hoy", done: exDone >= exTotal }] : []),
+    ...(cutPhaseIdx >= 1 ? [
+      { id: "weigh", auto: true, text: "Pesate hoy (siempre a la misma hora)", done: !!state.weightLog[today] },
+      { id: "allmeals", auto: true, text: "Registrá todas las comidas (mínimo 3)", done: mealsToday.length >= 3 },
+    ] : []),
+    ...(cutPhaseIdx >= 2 ? [
+      { id: "clean", auto: false, text: "Cero ultraprocesados hoy", done: !!cutManualToday.clean },
+      { id: "fast", auto: false, text: "Ayuno intermitente (si lo usaste hoy)", done: !!cutManualToday.fast },
+    ] : []),
+  ] : [];
+  const cutMissionsDone = cutMissions.filter((m) => m.done).length;
+  const cutXp = (() => {
+    if (!cut) return 0;
+    let xp = 0;
+    Object.entries(state.meals).forEach(([d, arr]) => { if (d >= cut.startDate && (arr || []).length) xp += 10; });
+    Object.entries(state.sessionLog).forEach(([d, arr]) => { if (d >= cut.startDate && (arr || []).length) xp += 15; });
+    Object.keys(state.weightLog).forEach((d) => { if (d >= cut.startDate) xp += 5; });
+    xp += cutBfEntries.length * 20;
+    return xp;
+  })();
+
+  const toggleCutManual = (id) => up((s) => {
+    s.cut.manual = s.cut.manual || {};
+    s.cut.manual[today] = s.cut.manual[today] || {};
+    if (s.cut.manual[today][id]) delete s.cut.manual[today][id]; else s.cut.manual[today][id] = true;
+    return s;
+  });
+
+  // Subida de nivel: celebrar una sola vez cuando el % de grasa cruza el umbral de fase
+  useEffect(() => {
+    if (!cut) return;
+    const reached = cutDone ? 3 : cutPhaseIdx;
+    if (reached > (cut.lastPhase || 0)) {
+      setBanner(reached >= 3
+        ? "🏆 ¡LO LOGRASTE! 8% de grasa: completaste el Plan Cut."
+        : `🎉 ¡Subiste de nivel! Fase ${reached + 1}: ${CUT_PHASES[reached].emoji} ${CUT_PHASES[reached].name}`);
+      setTimeout(() => setBanner(null), 12000);
+      up((s) => { s.cut.lastPhase = reached; return s; });
+    }
+  }, [cut, cutPhaseIdx, cutDone]);
+
+  // Avisos del Plan Cut mientras la app está abierta (uno por tipo por día)
+  useEffect(() => {
+    if (!cut) return;
+    const check = () => {
+      const now = new Date();
+      const h = now.getHours();
+      const fire = (key, msg) => {
+        const k = `cutnag-${key}-${dstr(now)}`;
+        if (firedRef.current[k]) return false;
+        firedRef.current[k] = true;
+        setBanner(msg);
+        setTimeout(() => setBanner(null), 12000);
+        return true;
+      };
+      if (h >= 14 && mealsToday.length === 0 && fire("meals", "👀 Todavía no registraste ninguna comida hoy. ¿Cómo venís con la dieta?")) return;
+      if (h >= 20 && prot < state.goals.protein * 0.7 && fire("prot", "🥩 Te falta proteína para hoy: sumá una buena fuente en la cena.")) return;
+      if (h >= 17) fire("tip", "💡 " + CUT_TIPS[dayOfYear() % CUT_TIPS.length]);
+    };
+    check();
+    const iv = setInterval(check, 60000);
+    return () => clearInterval(iv);
+  }, [cut, mealsToday.length, prot, state.goals.protein]);
+
   const dayPct = useMemo(() => {
     const parts = [];
     if (habitsToday.length) parts.push(habitsDone / habitsToday.length);
@@ -1036,6 +1169,10 @@ export default function App() {
     { Icon: Droplet, name: "Hidratado", desc: "Meta de agua cumplida hoy", done: water >= state.goals.water },
     { Icon: TrendingUp, name: "Bajo control", desc: "Registrá tu peso 7 días", done: Object.keys(state.weightLog).length >= 7 },
     { Icon: Apple, name: "Nutrición al día", desc: "Registrá 20 comidas", done: Object.values(state.meals).flat().length >= 20 },
+    { Icon: Target, name: "Modo Cut", desc: "Empezá el Plan Cut", done: !!cut },
+    { Icon: Award, name: "Fase 2 🎯", desc: "Bajá a 15% de grasa", done: !!cut && cutBf <= 15 },
+    { Icon: Flame, name: "Fase 3 🔥", desc: "Bajá a 12% de grasa", done: !!cut && cutBf <= 12 },
+    { Icon: Trophy, name: "Shredded 🏆", desc: "Llegá al 8% de grasa", done: cutDone },
   ];
   const achDone = ACHIEVEMENTS.filter((a) => a.done).length;
 
@@ -1154,6 +1291,26 @@ export default function App() {
             </div>
           </div>
         </div>
+
+        {cut && (
+          <div onClick={() => setTab("dieta")} style={{
+            marginTop: 12, borderRadius: 18, padding: "14px 16px", cursor: "pointer",
+            background: `linear-gradient(135deg, ${C.primary}, ${C.accent})`,
+            boxShadow: `0 8px 24px ${C.primaryGlow}`,
+            display: "flex", alignItems: "center", gap: 12,
+          }}>
+            <div style={{ fontSize: 26 }}>{cutDone ? "🏆" : cutPhase.emoji}</div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ color: "#fff", fontWeight: 800, fontSize: 14.5 }}>
+                Plan Cut · {cutDone ? "Completado" : `Nivel ${cutPhaseIdx + 1}: ${cutPhase.name}`}
+              </div>
+              <div style={{ color: "rgba(255,255,255,0.85)", fontSize: 12, fontWeight: 600 }}>
+                Misiones {cutMissionsDone}/{cutMissions.length} · {cutBf}% de grasa → meta {cutPhase.target}%
+              </div>
+            </div>
+            <div style={{ color: "#fff", fontWeight: 800, fontSize: 18 }}>→</div>
+          </div>
+        )}
 
         <SectionTitle>Tip del día</SectionTitle>
         <div style={{
@@ -1859,6 +2016,191 @@ export default function App() {
   const [newWeight, setNewWeight] = useState("");
   const [newMeas, setNewMeas] = useState({ waist: "", chest: "", arm: "" });
   const [calc, setCalc] = useState({ sex: "m", age: 18, height: 175, weight: 70, activity: 1.55, goal: 0 });
+  const [startBf, setStartBf] = useState("");
+  const [newBf, setNewBf] = useState("");
+
+  const startCut = () => {
+    const v = Number(startBf);
+    if (!v || v < 5 || v > 60) {
+      setBanner("Ingresá tu % de grasa estimado (entre 5 y 60)");
+      setTimeout(() => setBanner(null), 4000);
+      return;
+    }
+    up((s) => {
+      s.cut = {
+        startDate: today, startBf: v, bfLog: { [today]: v }, manual: {},
+        lastPhase: v > 15 ? 0 : v > 12 ? 1 : 2,
+      };
+      if (!s.reminders.some((r) => r.cut)) {
+        s.reminders.push(
+          { id: uid(), cut: true, text: "📝 ¿Ya registraste tu almuerzo? Mantené el conteo al día", time: "14:00", days: [0, 1, 2, 3, 4, 5, 6] },
+          { id: uid(), cut: true, text: "💪 ¿Cómo va el entreno? Marcá tus ejercicios en la rutina", time: "19:00", days: [1, 2, 3, 4, 5] },
+          { id: uid(), cut: true, text: "🔢 Cerrá el día: registrá todas tus calorías de hoy", time: "21:45", days: [0, 1, 2, 3, 4, 5, 6] },
+        );
+      }
+      return s;
+    });
+    setStartBf("");
+    setBanner("🎮 ¡Plan Cut activado! Arrancás en la Fase " + (v > 15 ? 1 : v > 12 ? 2 : 3));
+    setTimeout(() => setBanner(null), 6000);
+  };
+
+  /* ============ PLAN CUT (vista) ============ */
+  function CutPlan() {
+    if (!cut) {
+      return (
+        <>
+          <SectionTitle>Plan Cut 🎮</SectionTitle>
+          <Card>
+            <div style={{ fontWeight: 800, fontSize: 15.5, marginBottom: 6 }}>De donde estés hoy → 8% de grasa</div>
+            <div style={{ fontSize: 13.5, color: C.sub, lineHeight: 1.5, marginBottom: 12 }}>
+              Un plan por niveles basado en la guía de Oswal Candela: 3 fases con misiones diarias,
+              y calculadoras que se desbloquean a medida que bajás tu % de grasa.
+            </div>
+            <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+              <Input type="number" placeholder="Tu % de grasa estimado (ej: 30)" value={startBf} onChange={(e) => setStartBf(e.target.value)} />
+              <Btn onClick={startCut}>Empezar</Btn>
+            </div>
+            <div style={{ fontSize: 12, color: C.sub, lineHeight: 1.4, marginBottom: 10 }}>
+              Estimalo con fotos de referencia o una báscula con bioimpedancia; no hace falta que sea exacto.
+            </div>
+            <a href={CUT_VIDEO_URL} target="_blank" rel="noreferrer"
+              style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 700, color: C.primary, textDecoration: "none" }}>
+              <Video size={14} /> Ver la guía completa en video →
+            </a>
+          </Card>
+        </>
+      );
+    }
+
+    return (
+      <>
+        <SectionTitle right={
+          <a href={CUT_VIDEO_URL} target="_blank" rel="noreferrer" style={{ fontSize: 12.5, fontWeight: 700, color: C.primary, textDecoration: "none" }}>
+            Guía en video →
+          </a>
+        }>Plan Cut 🎮</SectionTitle>
+
+        <div style={{
+          borderRadius: 22, padding: "18px 18px 16px", marginBottom: 10,
+          background: `linear-gradient(135deg, ${C.primary}, ${C.accent})`,
+          boxShadow: `0 8px 24px ${C.primaryGlow}`,
+        }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={{ color: "rgba(255,255,255,0.85)", fontSize: 11.5, fontWeight: 800, letterSpacing: 1.2, textTransform: "uppercase" }}>
+              Nivel {cutPhaseIdx + 1} de 3
+            </div>
+            <div style={{ color: "#fff", fontSize: 12.5, fontWeight: 800 }}>⚡ {cutXp} XP</div>
+          </div>
+          <div style={{ color: "#fff", fontSize: 22, fontWeight: 800, letterSpacing: -0.4, margin: "4px 0 2px" }}>
+            {cutDone ? "🏆 Plan completado" : `${cutPhase.emoji} ${cutPhase.name}`}
+          </div>
+          <div style={{ color: "rgba(255,255,255,0.85)", fontSize: 12.5, fontWeight: 600, marginBottom: 10 }}>
+            {cutDone ? "Llegaste al 8%. Ahora el juego es mantenerlo." : `${cutPhase.range} · vas ${cutBf}% → meta ${cutPhase.target}%`}
+          </div>
+          <div style={{ height: 10, borderRadius: 5, background: "rgba(255,255,255,0.25)", overflow: "hidden" }}>
+            <div style={{ width: `${(cutDone ? 1 : cutPhasePct) * 100}%`, height: "100%", background: "#fff", borderRadius: 5, transition: "width 0.5s" }} />
+          </div>
+        </div>
+
+        <SectionTitle>Misiones de hoy ({cutMissionsDone}/{cutMissions.length})</SectionTitle>
+        <Card style={{ padding: 8 }}>
+          {cutMissions.map((m) => (
+            <Row key={m.id} title={m.text}
+              sub={m.auto ? "Se completa sola al registrar en la app" : "Marcala vos al final del día"}
+              right={<Check done={m.done} onClick={() => {
+                if (m.auto) {
+                  setBanner("Esta misión se completa sola cuando registrás 😉");
+                  setTimeout(() => setBanner(null), 3500);
+                } else toggleCutManual(m.id);
+              }} />} />
+          ))}
+        </Card>
+
+        <SectionTitle>Reglas de la fase</SectionTitle>
+        <Card>
+          {cutPhase.rules.map((r, i) => (
+            <div key={i} style={{ display: "flex", gap: 8, padding: "6px 0", fontSize: 13.5, lineHeight: 1.45, fontWeight: 500 }}>
+              <span style={{ color: C.primary, fontWeight: 800 }}>›</span><span>{r}</span>
+            </div>
+          ))}
+        </Card>
+
+        <SectionTitle>Tu % de grasa</SectionTitle>
+        <Card>
+          <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+            <Input type="number" placeholder="% de grasa estimado hoy" value={newBf} onChange={(e) => setNewBf(e.target.value)} />
+            <Btn onClick={() => {
+              const v = Number(newBf);
+              if (!v || v < 3 || v > 60) return;
+              up((s) => { s.cut.bfLog = s.cut.bfLog || {}; s.cut.bfLog[today] = v; return s; });
+              setNewBf("");
+            }}>Guardar</Btn>
+          </div>
+          {cutBfEntries.slice(-5).reverse().map(([d, v]) => (
+            <div key={d} style={{ display: "flex", justifyContent: "space-between", fontSize: 13.5, fontWeight: 600, padding: "5px 0", borderTop: `1px solid ${C.line}` }}>
+              <span style={{ color: C.sub }}>{fmtDate(d)}</span><span>{v}%</span>
+            </div>
+          ))}
+          <div style={{ fontSize: 12, color: C.sub, marginTop: 8, lineHeight: 1.4 }}>
+            Actualizalo cada 1–2 semanas: es lo que te hace subir de nivel.
+          </div>
+        </Card>
+
+        <SectionTitle>Desbloqueos</SectionTitle>
+        {CUT_PHASES.map((p, i) => {
+          const open = cutPhaseIdx >= i || cutDone;
+          return (
+            <Card key={i} style={{ marginBottom: 8, opacity: open ? 1 : 0.45 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 800, fontSize: 14 }}>
+                {open ? <Unlock size={15} color={C.primary} /> : <Lock size={15} color={C.sub} />}
+                {p.unlock}
+              </div>
+              {!open && <div style={{ fontSize: 12.5, color: C.sub, fontWeight: 600, marginTop: 4 }}>Se desbloquea en la Fase {i + 1} ({p.range}).</div>}
+              {open && i === 0 && (
+                bodyWeight ? (
+                  <div style={{ marginTop: 10 }}>
+                    <div style={{ background: C.primarySoft, borderRadius: 12, padding: 12, fontSize: 14, color: C.primaryInk, fontWeight: 600, lineHeight: 1.5, marginBottom: 10 }}>
+                      Con tus {bodyWeight} kg: <b>{Math.round(bodyWeight * 22)}–{Math.round(bodyWeight * 24)} kcal</b> · Proteína <b>{Math.round(bodyWeight * 1.5)}–{Math.round(bodyWeight * 2)} g</b>
+                    </div>
+                    <Btn small onClick={() => up((s) => {
+                      s.goals = { ...s.goals, kcal: Math.round(bodyWeight * 23), protein: Math.round(bodyWeight * 1.8) };
+                      return s;
+                    })}>Aplicar a mis metas</Btn>
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 13, color: C.sub, marginTop: 6 }}>Registrá tu peso corporal (más abajo) para calcular tus calorías.</div>
+                )
+              )}
+              {open && i === 1 && (
+                <div style={{ marginTop: 10 }}>
+                  <Btn small kind="soft" onClick={() => setShowCalc(true)}>Abrir calculadora completa ↓</Btn>
+                  <div style={{ fontSize: 12.5, color: C.sub, marginTop: 6, lineHeight: 1.4 }}>Aparece más abajo como "Calculadora de metas". Desde esta fase el conteo es obligatorio.</div>
+                </div>
+              )}
+              {open && i === 2 && (
+                <div style={{ fontSize: 13, lineHeight: 1.5, marginTop: 8, fontWeight: 500 }}>
+                  Protocolo sugerido de ayuno 16/8: ventana de comida de 8 h (ej: 13:00–21:00).
+                  Marcá la misión "Ayuno intermitente" los días que lo uses.
+                  <div style={{ background: C.amberSoft, color: C.amberInk, borderRadius: 10, padding: 10, marginTop: 8, fontSize: 12.5, fontWeight: 600, lineHeight: 1.45 }}>
+                    Recordá lo que dice la guía: con 12–15% ya tenés un cuerpo estético y sostenible. El 8% es un extra opcional, no una obligación.
+                  </div>
+                </div>
+              )}
+            </Card>
+          );
+        })}
+
+        <div style={{ textAlign: "right", margin: "4px 4px 0" }}>
+          <Btn kind="ghost" small onClick={() => {
+            if (confirm("¿Abandonar el Plan Cut? Se borran sus recordatorios y tu registro de % de grasa.")) {
+              up((s) => { s.cut = null; s.reminders = s.reminders.filter((r) => !r.cut); return s; });
+            }
+          }}>Abandonar plan</Btn>
+        </div>
+      </>
+    );
+  }
 
   function Dieta() {
     const last = weightEntriesAll.slice(-14);
@@ -1878,6 +2220,7 @@ export default function App() {
     return (
       <>
         <PageHeader title="Dieta" subtitle="Nutrición" />
+        {CutPlan()}
         <Card style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
           <MacroBox label="Calorías" value={kcal} goal={state.goals.kcal} unit="kcal" color={C.amber} />
           <MacroBox label="Proteína" value={prot} goal={state.goals.protein} unit="g" color={C.primary} />
