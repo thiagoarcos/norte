@@ -1,0 +1,19 @@
+{
+  // Mini-servidor de notificaciones push de NEXO FIT.
+  // Deploy: npx wrangler deploy  (requiere npx wrangler login antes)
+  // Secretos (una sola vez): npx wrangler secret put VAPID_PRIVATE_KEY
+  //                          npx wrangler secret put AUTH_TOKEN
+  "name": "nexofit-push",
+  "main": "src/index.js",
+  "compatibility_date": "2026-07-01",
+  "durable_objects": {
+    "bindings": [{ "name": "SCHEDULER", "class_name": "Scheduler" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Scheduler"] }],
+  "vars": {
+    // La clave pública VAPID no es secreta (el navegador la necesita para suscribirse).
+    "VAPID_PUBLIC_KEY": "BKEfmAAoSEqXsBLbzuJ0Fd423Z5DLAgqU_kOdYbxjsWth2-X6vyhZ4xpD4FjbXcZAOr4qJO_i6B0l-_-p-0Mwfk",
+    // Apple exige un mailto: o https: real acá, si no rechaza el push con 403.
+    "VAPID_SUBJECT": "mailto:arcossthiago@gmail.com"
+  }
+}

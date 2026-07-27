@@ -474,6 +474,7 @@ const initialState = {
   goals: { kcal: 2500, protein: 140, carbs: 300, fat: 80, water: 8 },
   customTips: [],
   cut: null,
+  push: { url: "", token: "", enabled: false },
 };
 
 const STORAGE_KEY = "nexofit-state-v4";
@@ -928,7 +929,8 @@ export default function App() {
   const [muscle, setMuscle] = useState(null);
   const [openLift, setOpenLift] = useState(null);
   const [liftCalc, setLiftCalc] = useState({ w: "", r: "" });
-  const [timer, setTimer] = useState(0);
+  const [timerEnd, setTimerEnd] = useState(null);
+  const [timerNow, setTimerNow] = useState(Date.now());
   const [timerTotal, setTimerTotal] = useState(60);
   const [confirmReset, setConfirmReset] = useState(false);
   const [showCalc, setShowCalc] = useState(false);
@@ -1019,16 +1021,123 @@ export default function App() {
     return () => clearInterval(iv);
   }, [state.reminders]);
 
+  /* Temporizador anclado a la hora de fin: aunque iOS congele el JS en segundo
+     plano, al volver muestra el tiempo real restante (no se atrasa). */
+  const timer = timerEnd ? Math.max(0, Math.ceil((timerEnd - timerNow) / 1000)) : 0;
   useEffect(() => {
-    if (timer <= 0) return;
-    const t = setTimeout(() => {
-      if (timer === 1) setBanner("¡Descanso terminado! Siguiente serie");
-      setTimer(timer - 1);
-    }, 1000);
-    return () => clearTimeout(t);
-  }, [timer]);
+    if (!timerEnd) return;
+    const iv = setInterval(() => setTimerNow(Date.now()), 500);
+    return () => clearInterval(iv);
+  }, [timerEnd]);
+  useEffect(() => {
+    if (timerEnd && timerNow >= timerEnd) {
+      setTimerEnd(null);
+      setBanner("¡Descanso terminado! Siguiente serie");
+      setTimeout(() => setBanner(null), 5000);
+    }
+  }, [timerNow, timerEnd]);
 
   const up = (fn) => setState((s) => fn(structuredClone(s)));
+
+  const flash = (msg, ms = 5000) => { setBanner(msg); setTimeout(() => setBanner(null), ms); };
+
+  /* ---------- Notificaciones push (worker/ en Cloudflare) ---------- */
+  const cutActive = !!state.cut;
+  const pushCfg = state.push || { url: "", token: "", enabled: false };
+  const pushReady = !!(pushCfg.enabled && pushCfg.url && pushCfg.token);
+  const pushCall = async (path, payload) => {
+    if (!pushCfg.url || !pushCfg.token) return null;
+    try {
+      return await fetch(pushCfg.url.replace(/\/+$/, "") + path, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: "Bearer " + pushCfg.token },
+        body: JSON.stringify(payload || {}),
+      });
+    } catch (e) { return null; }
+  };
+
+  const startTimer = (secs) => {
+    setTimerTotal(secs);
+    setTimerNow(Date.now());
+    setTimerEnd(Date.now() + secs * 1000);
+    if (pushReady)
+      pushCall("/schedule", {
+        id: "timer", at: Date.now() + secs * 1000,
+        title: "⏱️ ¡Descanso terminado!", body: "Siguiente serie 💪", ttl: 120,
+      });
+  };
+  const stopTimer = () => {
+    setTimerEnd(null);
+    if (pushReady) pushCall("/cancel", { id: "timer" });
+  };
+
+  const b64ToU8 = (s) => {
+    const pad = "=".repeat((4 - (s.length % 4)) % 4);
+    const raw = atob((s + pad).replace(/-/g, "+").replace(/_/g, "/"));
+    return Uint8Array.from(raw, (c) => c.charCodeAt(0));
+  };
+
+  const enablePush = async () => {
+    if (!pushCfg.url || !pushCfg.token) return flash("Completá la URL y el token del servidor primero");
+    if (!("serviceWorker" in navigator) || !("PushManager" in window))
+      return flash("Este navegador no soporta push. En iPhone: instalá la app en la pantalla de inicio (iOS 16.4+).", 8000);
+    try {
+      const perm = await Notification.requestPermission();
+      if (perm !== "granted") return flash("Permiso de notificaciones denegado");
+      const reg = await navigator.serviceWorker.ready;
+      const vr = await fetch(pushCfg.url.replace(/\/+$/, "") + "/vapid");
+      const { publicKey } = await vr.json();
+      const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToU8(publicKey) });
+      const r = await pushCall("/subscribe", { subscription: sub.toJSON() });
+      if (r && r.ok) {
+        up((s) => { s.push = { ...pushCfg, enabled: true }; return s; });
+        flash("✅ Notificaciones activadas en este teléfono");
+      } else {
+        flash("El servidor rechazó la suscripción. Revisá la URL y el token.");
+      }
+    } catch (e) {
+      flash("Error activando push: " + e.message, 8000);
+    }
+  };
+
+  const disablePush = async () => {
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.getSubscription();
+      if (sub) await sub.unsubscribe();
+    } catch (e) { /* sin SW en dev */ }
+    up((s) => { s.push = { ...pushCfg, enabled: false }; return s; });
+    flash("Notificaciones desactivadas");
+  };
+
+  /* Con push activo, agenda en el worker los recordatorios de las próximas 48 h
+     (ids deterministas por recordatorio+fecha → re-agendar es idempotente). */
+  useEffect(() => {
+    if (!pushReady) return;
+    const items = [];
+    for (let off = 0; off < 2; off++) {
+      const d = new Date();
+      d.setDate(d.getDate() + off);
+      const ds = dstr(d);
+      state.reminders.forEach((r) => {
+        if (!r.days.includes(d.getDay())) return;
+        const [hh, mm] = String(r.time || "0:0").split(":").map(Number);
+        const t = new Date(d);
+        t.setHours(hh || 0, mm || 0, 0, 0);
+        if (t.getTime() > Date.now())
+          items.push({ id: `rem-${r.id}-${ds}`, at: t.getTime(), title: "NEXO FIT", body: r.text, ttl: 1800 });
+      });
+      if (state.cut) {
+        const t = new Date(d);
+        t.setHours(17, 0, 0, 0);
+        if (t.getTime() > Date.now()) {
+          const doy = Math.floor((t - new Date(t.getFullYear(), 0, 0)) / 86400000);
+          items.push({ id: `tip-${ds}`, at: t.getTime(), title: "💡 Tip del Plan Cut", body: CUT_TIPS[doy % CUT_TIPS.length], ttl: 3600 });
+        }
+      }
+    }
+    if (items.length) pushCall("/schedule", items);
+  }, [pushReady, state.reminders, cutActive]);
 
   /* ---------- métricas ---------- */
   const habitsToday = state.habits.filter((h) => h.days.includes(dow));
@@ -1420,7 +1529,7 @@ export default function App() {
                 <div style={{ fontSize: 12, fontWeight: 800 }}>{timer}</div>
               </Ring>
               <div style={{ fontSize: 13, fontWeight: 700, color: C.sub }}>Descanso</div>
-              <button onClick={() => setTimer(0)} style={{
+              <button onClick={stopTimer} style={{
                 background: C.soft, border: "none", borderRadius: 999, width: 28, height: 28,
                 cursor: "pointer", color: C.sub, display: "flex", alignItems: "center", justifyContent: "center",
               }}><X size={14} /></button>
@@ -1432,7 +1541,7 @@ export default function App() {
               boxShadow: "0 8px 24px rgba(0,0,0,0.08)",
             }}>
               {[60, 90, 120].map((t) => (
-                <button key={t} onClick={() => { setTimer(t); setTimerTotal(t); }} style={{
+                <button key={t} onClick={() => startTimer(t)} style={{
                   border: "none", borderRadius: 999, padding: "8px 14px", cursor: "pointer",
                   fontFamily: FONT, fontWeight: 800, fontSize: 12.5,
                   background: C.primarySoft, color: C.theme === "dark" ? C.primaryInk : C.primary,
@@ -2528,6 +2637,35 @@ export default function App() {
             </div>
           ))}
           {(state.customTips || []).length === 0 && <div style={{ fontSize: 13, color: C.sub }}>Tus tips entran en la rotación del "Tip del día".</div>}
+        </Card>
+
+        <SectionTitle>Notificaciones push 📲</SectionTitle>
+        <Card>
+          <div style={{ fontSize: 13, color: C.sub, lineHeight: 1.45, marginBottom: 10 }}>
+            Con el mini-servidor desplegado (carpeta <b>worker/</b> del repo), los recordatorios y el
+            temporizador de descanso te llegan como notificaciones nativas aunque la app esté cerrada.
+            En iPhone la app tiene que estar instalada en la pantalla de inicio (iOS 16.4+).
+          </div>
+          <div style={{ display: "grid", gap: 8, marginBottom: 10 }}>
+            <Input placeholder="URL del servidor (https://nexofit-push….workers.dev)" value={pushCfg.url}
+              onChange={(e) => up((s) => { s.push = { ...pushCfg, url: e.target.value }; return s; })} />
+            <Input placeholder="Token secreto" value={pushCfg.token}
+              onChange={(e) => up((s) => { s.push = { ...pushCfg, token: e.target.value }; return s; })} />
+          </div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+            {pushCfg.enabled ? (
+              <>
+                <span style={{ fontSize: 13, fontWeight: 700, color: C.primary, flex: 1 }}>✅ Activadas en este teléfono</span>
+                <Btn small kind="soft" onClick={async () => {
+                  const r = await pushCall("/test");
+                  flash(r && r.ok ? "Enviada: fijate la notificación 📲" : "No se pudo enviar la prueba");
+                }}>Probar</Btn>
+                <Btn small kind="danger" onClick={disablePush}>Desactivar</Btn>
+              </>
+            ) : (
+              <Btn small onClick={enablePush}>Activar en este teléfono</Btn>
+            )}
+          </div>
         </Card>
 
         <SectionTitle>Seguridad</SectionTitle>

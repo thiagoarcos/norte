@@ -13,6 +13,8 @@ export default defineConfig({
     VitePWA({
       registerType: "autoUpdate",
       includeAssets: ["favicon.svg", "apple-touch-icon.png"],
+      // push-sw.js (en public/) agrega los handlers de Web Push al SW generado.
+      workbox: { importScripts: ["push-sw.js"] },
       manifest: {
         name: "NEXO FIT",
         short_name: "NEXO FIT",
