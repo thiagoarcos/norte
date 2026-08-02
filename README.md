@@ -1,4 +1,4 @@
-# NEXO FIT — deploy en GitHub Pages
+# NORTE — deploy en GitHub Pages
 
 App de hábitos, gimnasio y dieta lista para publicar en GitHub Pages e instalar como PWA en tu iPhone.
 
@@ -87,7 +87,7 @@ Reemplazá `TUUSUARIO` por tu usuario real de GitHub. La primera vez te va a abr
 1. Abrí el link en **Safari** (obligatorio, no Chrome).
 2. Botón **Compartir** (cuadradito con flecha para arriba).
 3. Bajá y tocá **Agregar a inicio**.
-4. Nombre "NEXO FIT" → **Agregar**.
+4. Nombre "NORTE" → **Agregar**.
 
 Aparece el ícono verde en tu home. Se abre en pantalla completa, sin barra de Safari.
 

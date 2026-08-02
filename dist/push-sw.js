@@ -8,7 +8,7 @@ self.addEventListener("push", (event) => {
     data = { body: event.data ? event.data.text() : "" };
   }
   event.waitUntil(
-    self.registration.showNotification(data.title || "NEXO FIT", {
+    self.registration.showNotification(data.title || "NORTE", {
       body: data.body || "",
       icon: "/nexofit/icon-192.png",
       badge: "/nexofit/icon-192.png",

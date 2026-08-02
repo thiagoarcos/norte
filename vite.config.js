@@ -16,9 +16,9 @@ export default defineConfig({
       // push-sw.js (en public/) agrega los handlers de Web Push al SW generado.
       workbox: { importScripts: ["push-sw.js"] },
       manifest: {
-        name: "NEXO FIT",
-        short_name: "NEXO FIT",
-        description: "Hábitos, gym y dieta en un solo lugar",
+        name: "NORTE",
+        short_name: "NORTE",
+        description: "Disciplina: hábitos, gym, dieta y tu cronograma en un solo lugar",
         theme_color: "#2E5BFF",
         background_color: "#F7F8FA",
         display: "standalone",

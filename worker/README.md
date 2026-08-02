@@ -1,7 +1,7 @@
 # nexofit-push — servidor de notificaciones
 
 Mini-servidor en Cloudflare Workers (plan gratuito) que manda notificaciones push
-nativas al iPhone aunque NEXO FIT esté cerrada: temporizador de descanso,
+nativas al iPhone aunque NORTE esté cerrada: temporizador de descanso,
 recordatorios y tips del Plan Cut.
 
 ## Deploy (una sola vez)
@@ -24,7 +24,7 @@ El deploy imprime la URL, algo como `https://nexofit-push.<tu-cuenta>.workers.de
 
 ## Activar en el iPhone
 
-1. Abrí NEXO FIT **instalada en la pantalla de inicio** (no en Safari suelto) — iOS 16.4+.
+1. Abrí NORTE **instalada en la pantalla de inicio** (no en Safari suelto) — iOS 16.4+.
 2. Pestaña **Más → Notificaciones push**: pegá la URL del worker y el token (el valor
    `AUTH_TOKEN` de `.dev.vars`).
 3. Tocá **Activar en este teléfono** y aceptá el permiso.

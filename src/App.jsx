@@ -2,10 +2,10 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import {
   Target, Dumbbell, Sun, Moon, Salad, Settings, Trophy, Flame, Zap, Droplet,
   TrendingUp, Apple, Sprout, Lock, Unlock, Bell, Lightbulb, Smartphone, X, Calendar,
-  Upload, Award, PersonStanding, Check as CheckIcon, Video, Pencil, AlertTriangle,
+  Upload, Award, PersonStanding, Check as CheckIcon, Video, Pencil, AlertTriangle, ScanFace,
 } from "lucide-react";
 
-/* ============ NEXO FIT v4 ============
+/* ============ NORTE (ex NEXO FIT) v4 ============
    Nuevo en v4: mapa muscular interactivo (frente/espalda) en Gym,
    base de ejercicios por músculo con tips de técnica, referencia en
    video, calculadora de sobrecarga progresiva según tu peso corporal
@@ -349,11 +349,61 @@ const ytLink = (name) => `https://www.youtube.com/results?search_query=${encodeU
 /* ---------- PIN de bloqueo ---------- */
 const PIN_KEY = "nexofit-pin-hash-v1";
 const PIN_SESSION = "nexofit-unlocked";
+const BIO_KEY = "nexofit-bio-cred-v1"; // id de la credencial WebAuthn (Face ID / huella)
 
 async function hashPin(pin) {
   const data = new TextEncoder().encode("nexofit-salt:" + pin);
   const buf = await crypto.subtle.digest("SHA-256", data);
   return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/* ---------- Face ID / huella vía WebAuthn (bloqueo local del dispositivo) ---------- */
+const bioSupported = () =>
+  typeof window !== "undefined" && !!window.PublicKeyCredential &&
+  !!(navigator.credentials && navigator.credentials.create);
+const bioEnrolled = () => { try { return !!localStorage.getItem(BIO_KEY); } catch (e) { return false; } };
+const b64uFromBuf = (buf) =>
+  btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const bufFromB64u = (s) => {
+  s = s.replace(/-/g, "+").replace(/_/g, "/");
+  const bin = atob(s);
+  const u = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+  return u.buffer;
+};
+const randBytes = (n) => { const a = new Uint8Array(n); crypto.getRandomValues(a); return a; };
+
+async function bioEnroll() {
+  if (!bioSupported()) throw new Error("Este dispositivo no soporta Face ID / huella acá.");
+  const cred = await navigator.credentials.create({
+    publicKey: {
+      challenge: randBytes(32),
+      rp: { name: "NORTE", id: location.hostname },
+      user: { id: randBytes(16), name: "norte", displayName: "NORTE" },
+      pubKeyCredParams: [{ type: "public-key", alg: -7 }, { type: "public-key", alg: -257 }],
+      authenticatorSelection: { authenticatorAttachment: "platform", userVerification: "required", residentKey: "preferred" },
+      attestation: "none",
+      timeout: 60000,
+    },
+  });
+  if (!cred) throw new Error("No se pudo registrar.");
+  localStorage.setItem(BIO_KEY, b64uFromBuf(cred.rawId));
+  return true;
+}
+
+async function bioAuth() {
+  const id = bioEnrolled() && localStorage.getItem(BIO_KEY);
+  if (!id) throw new Error("No hay Face ID configurado.");
+  const assertion = await navigator.credentials.get({
+    publicKey: {
+      challenge: randBytes(32),
+      allowCredentials: [{ type: "public-key", id: bufFromB64u(id), transports: ["internal"] }],
+      userVerification: "required",
+      rpId: location.hostname,
+      timeout: 60000,
+    },
+  });
+  return !!assertion;
 }
 
 /* ---------- análisis de sobrecarga progresiva ---------- */
@@ -475,6 +525,26 @@ const initialState = {
   customTips: [],
   cut: null,
   push: { url: "", token: "", enabled: false },
+  // Cronograma: who = "yo" | "novia"; day 0=Dom..6=Sáb; end vacío = aviso puntual
+  schedule: [
+    // Novia
+    { id: uid(), who: "novia", title: "Sale del colegio", day: 1, start: "13:50", end: "" },
+    { id: uid(), who: "novia", title: "Vóley", day: 1, start: "20:30", end: "22:00" },
+    { id: uid(), who: "novia", title: "Sale del colegio", day: 2, start: "13:00", end: "" },
+    { id: uid(), who: "novia", title: "Sale del colegio", day: 3, start: "13:00", end: "" },
+    { id: uid(), who: "novia", title: "Gimnasia", day: 3, start: "15:20", end: "16:20" },
+    { id: uid(), who: "novia", title: "Sale del colegio", day: 4, start: "13:00", end: "" },
+    { id: uid(), who: "novia", title: "Sale del colegio", day: 5, start: "13:00", end: "" },
+    { id: uid(), who: "novia", title: "Gimnasia", day: 5, start: "17:20", end: "18:20" },
+    { id: uid(), who: "novia", title: "Vóley", day: 5, start: "20:30", end: "22:00" },
+    // Yo
+    { id: uid(), who: "yo", title: "Gym (volvemos juntos del vóley)", day: 1, start: "20:30", end: "22:00" },
+    { id: uid(), who: "yo", title: "Gym", day: 2, start: "18:00", end: "19:30" },
+    { id: uid(), who: "yo", title: "Gym", day: 3, start: "18:00", end: "19:30" },
+    { id: uid(), who: "yo", title: "INVAP", day: 4, start: "12:30", end: "16:30" },
+    { id: uid(), who: "yo", title: "INVAP", day: 5, start: "12:30", end: "16:30" },
+    { id: uid(), who: "yo", title: "Gym (volvemos juntos del vóley)", day: 5, start: "20:30", end: "22:00" },
+  ],
 };
 
 const STORAGE_KEY = "nexofit-state-v4";
@@ -741,6 +811,7 @@ function PinGate({ theme, onUnlock }) {
   const [pin2, setPin2] = useState("");
   const [error, setError] = useState("");
   const [attempts, setAttempts] = useState(0);
+  const [bio] = useState(() => bioSupported() && bioEnrolled());
   const PAL = theme === "dark" ? DARK : LIGHT;
 
   useEffect(() => {
@@ -751,6 +822,24 @@ function PinGate({ theme, onUnlock }) {
       } catch (e) { setMode("create"); }
     })();
   }, []);
+
+  const doBio = async (auto) => {
+    try {
+      setError("");
+      const ok = await bioAuth();
+      if (ok) { sessionStorage.setItem(PIN_SESSION, "1"); onUnlock(); }
+    } catch (e) {
+      if (!auto) setError("No se pudo con Face ID — usá tu PIN");
+    }
+  };
+
+  // Al abrir con la app bloqueada y Face ID configurado, lo intentamos solo (silencioso si falla).
+  // Diferido con setTimeout para no llamar setState en el cuerpo del effect (renders en cascada).
+  useEffect(() => {
+    if (mode !== "enter" || !bio) return;
+    const t = setTimeout(() => doBio(true), 0);
+    return () => clearTimeout(t);
+  }, [mode]);
 
   const handleKey = (k) => {
     setError("");
@@ -823,7 +912,7 @@ function PinGate({ theme, onUnlock }) {
       }}>
         <Lock size={28} color="#fff" />
       </div>
-      <div style={{ fontSize: 26, fontWeight: 800, marginBottom: 4, letterSpacing: -0.5, position: "relative" }}>NEXO FIT</div>
+      <div style={{ fontSize: 26, fontWeight: 800, marginBottom: 4, letterSpacing: -0.5, position: "relative" }}>NORTE</div>
       <div style={{ fontSize: 14, color: PAL.sub, fontWeight: 600, marginBottom: 32, textAlign: "center", maxWidth: 280, position: "relative" }}>
         {title}
       </div>
@@ -879,6 +968,18 @@ function PinGate({ theme, onUnlock }) {
         }}>⌫</button>
       </div>
 
+      {mode === "enter" && bio && (
+        <button onClick={() => doBio(false)} style={{
+          marginTop: 26, display: "flex", alignItems: "center", gap: 8,
+          border: `1px solid ${PAL.line}`, background: PAL.card, color: PAL.primary,
+          borderRadius: 14, padding: "12px 18px", fontSize: 15, fontWeight: 800,
+          fontFamily: FONT, cursor: "pointer", position: "relative",
+          boxShadow: `0 4px 16px ${PAL.primaryGlow}`,
+        }}>
+          <ScanFace size={20} /> Desbloquear con Face ID
+        </button>
+      )}
+
       {mode === "enter" && attempts >= 3 && (
         <div style={{ marginTop: 30, textAlign: "center", maxWidth: 300 }}>
           <div style={{ fontSize: 13, color: PAL.sub, marginBottom: 10, lineHeight: 1.5 }}>
@@ -911,6 +1012,7 @@ export default function App() {
     } catch (e) { return false; }
   });
   const [showPinSetup, setShowPinSetup] = useState(false);
+  const [bioOn, setBioOn] = useState(bioEnrolled());
   const [installPrompt, setInstallPrompt] = useState(null);
   const [installed, setInstalled] = useState(false);
   const [installHidden, setInstallHidden] = useState(() => {
@@ -1125,7 +1227,7 @@ export default function App() {
         const t = new Date(d);
         t.setHours(hh || 0, mm || 0, 0, 0);
         if (t.getTime() > Date.now())
-          items.push({ id: `rem-${r.id}-${ds}`, at: t.getTime(), title: "NEXO FIT", body: r.text, ttl: 1800 });
+          items.push({ id: `rem-${r.id}-${ds}`, at: t.getTime(), title: "NORTE", body: r.text, ttl: 1800 });
       });
       if (state.cut) {
         const t = new Date(d);
@@ -1360,7 +1462,7 @@ export default function App() {
           }}>
             <Smartphone size={24} color="#fff" />
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ color: "#fff", fontWeight: 800, fontSize: 14.5, letterSpacing: -0.2 }}>Instalar NEXO FIT</div>
+              <div style={{ color: "#fff", fontWeight: 800, fontSize: 14.5, letterSpacing: -0.2 }}>Instalar NORTE</div>
               <div style={{ color: "rgba(255,255,255,0.85)", fontSize: 12, fontWeight: 500 }}>Como app en tu pantalla de inicio</div>
             </div>
             <button onClick={triggerInstall} style={{
@@ -2536,6 +2638,121 @@ export default function App() {
   /* ============ MÁS ============ */
   const [newRem, setNewRem] = useState({ text: "", time: "18:00" });
   const [newTip, setNewTip] = useState("");
+  const [editEvt, setEditEvt] = useState(null);
+  const [newEvt, setNewEvt] = useState({ who: "yo", title: "", day: 1, start: "18:00", end: "19:30" });
+
+  /* ============ AGENDA / CRONOGRAMA ============ */
+  function Agenda() {
+    const OWNER = {
+      yo: { color: C.primary, soft: C.primarySoft, ink: C.primaryInk, label: "Yo" },
+      novia: {
+        color: "#EC4899",
+        soft: state.theme === "dark" ? "rgba(236,72,153,0.16)" : "#FCE7F3",
+        ink: state.theme === "dark" ? "#F9A8D4" : "#BE185D",
+        label: "Novia",
+      },
+    };
+    const ORDER = [1, 2, 3, 4, 5, 6, 0];
+    const evts = state.schedule || [];
+    const fmt = (e) => (e.end ? `${e.start}–${e.end}` : e.start);
+    const byDay = (d) => evts.filter((e) => e.day === d).sort((a, b) => a.start.localeCompare(b.start));
+
+    // helpers llamados inline (no como <Componente/>) para no remontar los inputs y perder el foco
+    const daySingle = (value, onPick) => (
+      <div style={{ display: "flex", gap: 6 }}>
+        {ORDER.map((d) => (
+          <button key={d} onClick={() => onPick(d)} style={{
+            flex: 1, padding: "8px 0", borderRadius: 10, cursor: "pointer", fontFamily: FONT,
+            fontWeight: 800, fontSize: 13,
+            border: `1px solid ${value === d ? C.primary : C.line}`,
+            background: value === d ? C.primary : C.card,
+            color: value === d ? "#fff" : C.sub,
+          }}>{DAYS[d]}</button>
+        ))}
+      </div>
+    );
+
+    const editFields = (val, set) => (
+      <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
+        <Segmented options={[["yo", "Yo"], ["novia", "Novia"]]} value={val.who} onChange={(v) => set({ ...val, who: v })} />
+        <Input placeholder="Actividad (ej: Gym, Vóley, INVAP)" value={val.title} onChange={(e) => set({ ...val, title: e.target.value })} />
+        {daySingle(val.day, (d) => set({ ...val, day: d }))}
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <Input type="time" value={val.start} style={{ flex: 1 }} onChange={(e) => set({ ...val, start: e.target.value })} />
+          <span style={{ color: C.sub, fontWeight: 700 }}>→</span>
+          <Input type="time" value={val.end} style={{ flex: 1 }} onChange={(e) => set({ ...val, end: e.target.value })} />
+        </div>
+        <div style={{ fontSize: 12, color: C.sub }}>Dejá la hora de fin vacía para un aviso puntual (ej: “sale del colegio”).</div>
+      </div>
+    );
+
+    return (
+      <>
+        <PageHeader title="Agenda" subtitle="Tu cronograma y el de tu novia" />
+        <div style={{ display: "flex", gap: 14, margin: "0 4px 14px" }}>
+          {Object.values(OWNER).map((o) => (
+            <div key={o.label} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, fontWeight: 700, color: C.sub }}>
+              <span style={{ width: 12, height: 12, borderRadius: 4, background: o.color }} />{o.label}
+            </div>
+          ))}
+        </div>
+
+        {ORDER.map((d) => {
+          const list = byDay(d);
+          const isToday = d === dow;
+          return (
+            <div key={d} style={{ marginBottom: 14 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 4px 8px" }}>
+                <div style={{ fontWeight: 800, fontSize: 15, color: isToday ? C.primary : C.ink }}>{DAY_NAMES[d]}</div>
+                {isToday && <span style={{ fontSize: 10.5, fontWeight: 800, color: "#fff", background: C.primary, borderRadius: 6, padding: "2px 7px" }}>HOY</span>}
+              </div>
+              {list.length === 0 ? (
+                <div style={{ fontSize: 13, color: C.sub, padding: "0 6px 2px" }}>Libre</div>
+              ) : list.map((e) => {
+                const o = OWNER[e.who] || OWNER.yo;
+                const editing = editEvt === e.id;
+                return (
+                  <Card key={e.id} style={{ marginBottom: 8, padding: 0, overflow: "hidden" }}>
+                    <div style={{ display: "flex", alignItems: "stretch" }}>
+                      <div style={{ width: 5, background: o.color, flexShrink: 0 }} />
+                      <div style={{ flex: 1, padding: "12px 14px", minWidth: 0 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                          <div style={{ background: o.soft, color: o.ink, fontWeight: 800, fontSize: 12.5, borderRadius: 8, padding: "5px 9px", whiteSpace: "nowrap" }}>{fmt(e)}</div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontWeight: 700, fontSize: 15, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.title || "—"}</div>
+                            <div style={{ fontSize: 11.5, color: o.color, fontWeight: 700 }}>{o.label}</div>
+                          </div>
+                          <Btn kind="soft" small onClick={() => setEditEvt(editing ? null : e.id)} style={{ display: "flex" }}>{editing ? "Listo" : <Pencil size={14} />}</Btn>
+                        </div>
+                        {editing && (
+                          <>
+                            {editFields(e, (nv) => up((s) => { Object.assign(s.schedule.find((x) => x.id === e.id), nv); return s; }))}
+                            <div style={{ marginTop: 8, textAlign: "right" }}>
+                              <Btn kind="danger" small onClick={() => { setEditEvt(null); up((s) => { s.schedule = s.schedule.filter((x) => x.id !== e.id); return s; }); }}>Borrar</Btn>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </Card>
+                );
+              })}
+            </div>
+          );
+        })}
+
+        <SectionTitle>Nuevo bloque</SectionTitle>
+        <Card>
+          {editFields(newEvt, setNewEvt)}
+          <Btn style={{ marginTop: 10, width: "100%" }} onClick={() => {
+            if (!newEvt.title.trim()) return;
+            up((s) => { s.schedule = [...(s.schedule || []), { id: uid(), ...newEvt, title: newEvt.title.trim() }]; return s; });
+            setNewEvt({ who: newEvt.who, title: "", day: newEvt.day, start: "18:00", end: "19:30" });
+          }}>Agregar al cronograma</Btn>
+        </Card>
+      </>
+    );
+  }
 
   function Mas() {
     return (
@@ -2704,6 +2921,44 @@ export default function App() {
           })()}
         </Card>
 
+        <Card style={{ marginTop: 8 }}>
+          {(() => {
+            const hasPin = !!localStorage.getItem(PIN_KEY);
+            const supported = bioSupported();
+            return (
+              <>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
+                  <div style={{ flex: "1 1 180px", minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", gap: 6 }}>
+                      <ScanFace size={14} /> Face ID / huella
+                    </div>
+                    <div style={{ fontSize: 12.5, color: C.sub, fontWeight: 500, lineHeight: 1.4 }}>
+                      {!supported
+                        ? "No disponible acá. En iPhone instalá la app en la pantalla de inicio (iOS 16.4+)."
+                        : bioOn
+                        ? "Desbloqueás con tu cara o huella; el PIN queda de respaldo."
+                        : "Sumá desbloqueo biométrico además del PIN."}
+                    </div>
+                  </div>
+                  {supported && (bioOn ? (
+                    <Btn small kind="danger" onClick={() => { localStorage.removeItem(BIO_KEY); setBioOn(false); flash("Face ID desactivado"); }}>Desactivar</Btn>
+                  ) : hasPin ? (
+                    <Btn small onClick={async () => {
+                      try { await bioEnroll(); setBioOn(true); flash("Face ID activado 🎉"); }
+                      catch (e) { flash("No se pudo activar Face ID"); }
+                    }}>Activar</Btn>
+                  ) : null)}
+                </div>
+                {supported && !bioOn && !hasPin && (
+                  <div style={{ fontSize: 12, color: C.amberInk, marginTop: 8, fontWeight: 700 }}>
+                    Creá primero un PIN para poder activar Face ID.
+                  </div>
+                )}
+              </>
+            );
+          })()}
+        </Card>
+
         <SectionTitle>Datos</SectionTitle>
         <Card>
           {confirmReset ? (
@@ -2798,9 +3053,10 @@ export default function App() {
   const h1Style = { margin: "4px 4px 14px", fontSize: 32, fontWeight: 800, letterSpacing: -0.5 };
 
   const tabs = [
-    { id: "habitos", label: "Hábitos", Icon: Target },
     { id: "gym", label: "Gym", Icon: Dumbbell },
+    { id: "agenda", label: "Agenda", Icon: Calendar },
     { id: "hoy", label: "Hoy", Icon: Sun },
+    { id: "habitos", label: "Hábitos", Icon: Target },
     { id: "dieta", label: "Dieta", Icon: Salad },
     { id: "mas", label: "Más", Icon: Settings },
   ];
@@ -2838,6 +3094,7 @@ export default function App() {
 
       <div style={{ maxWidth: 520, margin: "0 auto", padding: "16px 14px 120px" }}>
         {tab === "hoy" && Hoy()}
+        {tab === "agenda" && Agenda()}
         {tab === "habitos" && Habitos()}
         {tab === "gym" && Gym()}
         {tab === "dieta" && Dieta()}

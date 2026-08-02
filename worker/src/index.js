@@ -1,4 +1,4 @@
-/* Mini-servidor de notificaciones de NEXO FIT (Cloudflare Worker + Durable Object).
+/* Mini-servidor de notificaciones de NORTE (Cloudflare Worker + Durable Object).
    La app le pide "avisame a las X" y el Durable Object usa una alarma para mandar
    el Web Push exacto a esa hora, con la app cerrada.
 
@@ -41,7 +41,7 @@ export class Scheduler {
       for (const n of items) {
         if (!n.id || !n.at) continue;
         await this.state.storage.put("n:" + n.id, {
-          at: Number(n.at), title: n.title || "NEXO FIT", body: n.body || "", ttl: n.ttl,
+          at: Number(n.at), title: n.title || "NORTE", body: n.body || "", ttl: n.ttl,
         });
       }
       await this.resetAlarm();
@@ -62,7 +62,7 @@ export class Scheduler {
     if (url.pathname === "/test") {
       const sub = await this.state.storage.get("sub");
       if (!sub) return json({ ok: false, error: "sin suscripción: activá las notificaciones primero" }, 400);
-      const res = await sendPush(sub, { title: "NEXO FIT", body: "🎉 ¡Las notificaciones funcionan!" }, this.env, 60);
+      const res = await sendPush(sub, { title: "NORTE", body: "🎉 ¡Las notificaciones funcionan!" }, this.env, 60);
       return json({ ok: res.ok, status: res.status, detail: res.ok ? undefined : await res.text() });
     }
 

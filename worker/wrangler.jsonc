@@ -1,5 +1,5 @@
 {
-  // Mini-servidor de notificaciones push de NEXO FIT.
+  // Mini-servidor de notificaciones push de NORTE (worker sigue llamándose nexofit-push para no romper la URL ya desplegada).
   // Deploy: npx wrangler deploy  (requiere npx wrangler login antes)
   // Secretos (una sola vez): npx wrangler secret put VAPID_PRIVATE_KEY
   //                          npx wrangler secret put AUTH_TOKEN
