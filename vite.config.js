@@ -14,7 +14,9 @@ export default defineConfig({
       registerType: "autoUpdate",
       includeAssets: ["favicon.svg", "apple-touch-icon.png"],
       // push-sw.js (en public/) agrega los handlers de Web Push al SW generado.
-      workbox: { importScripts: ["push-sw.js"] },
+      // cleanupOutdatedCaches + clientsClaim: cada deploy purga los cachés viejos y
+      // toma control de la página al toque (evita pantallas en blanco por caché rancio).
+      workbox: { importScripts: ["push-sw.js"], cleanupOutdatedCaches: true, clientsClaim: true },
       manifest: {
         name: "NORTE",
         short_name: "NORTE",

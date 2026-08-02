@@ -31,5 +31,33 @@
   <link rel="manifest" href="/nexofit/manifest.webmanifest"><script id="vite-plugin-pwa:register-sw" src="/nexofit/registerSW.js"></script></head>
   <body>
     <div id="root"></div>
+    <script>
+      /* Auto-recuperación de "pantalla en blanco": si la app no montó (root vacío),
+         casi siempre es un service worker / caché de la PWA corrupto tras un deploy.
+         Limpiamos SW + cachés y recargamos UNA sola vez (guardia anti-bucle). */
+      window.addEventListener("load", function () {
+        setTimeout(function () {
+          var root = document.getElementById("root");
+          if (root && root.childElementCount > 0) return; // la app montó: todo bien
+          if (sessionStorage.getItem("norte-recovered") === "1") return; // ya reintentamos
+          try { sessionStorage.setItem("norte-recovered", "1"); } catch (e) {}
+          Promise.resolve()
+            .then(function () {
+              if ("serviceWorker" in navigator)
+                return navigator.serviceWorker.getRegistrations().then(function (rs) {
+                  return Promise.all(rs.map(function (r) { return r.unregister(); }));
+                });
+            })
+            .then(function () {
+              if (window.caches && caches.keys)
+                return caches.keys().then(function (ks) {
+                  return Promise.all(ks.map(function (k) { return caches.delete(k); }));
+                });
+            })
+            .catch(function () {})
+            .then(function () { location.reload(); });
+        }, 6000);
+      });
+    </script>
   </body>
 </html>
