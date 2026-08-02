@@ -109,6 +109,16 @@ export class Scheduler {
       return json({ online: Date.now() - seen < 40000, lastSeen: seen });
     }
 
+    /* ---------- Sync de Agenda (app -> NEXO/Obsidian) ---------- */
+    if (url.pathname === "/agenda/push") {
+      await this.state.storage.put("agenda_snapshot", { schedule: body.schedule || [], at: Date.now() });
+      return json({ ok: true });
+    }
+    if (url.pathname === "/agenda/get") {
+      const snap = await this.state.storage.get("agenda_snapshot");
+      return json(snap || { schedule: [], at: 0 });
+    }
+
     return json({ error: "not found" }, 404);
   }
 

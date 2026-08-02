@@ -1342,6 +1342,12 @@ export default function App() {
     if (items.length) pushCall("/schedule", items);
   }, [pushReady, state.reminders, state.schedule, state.agendaAlerts, cutActive]);
 
+  /* Sync de la Agenda hacia NEXO/Obsidian: subimos el snapshot cuando cambia. */
+  useEffect(() => {
+    if (!pushReady) return;
+    pushCall("/agenda/push", { schedule: state.schedule || [] });
+  }, [pushReady, state.schedule]);
+
   /* ---------- métricas ---------- */
   const habitsToday = state.habits.filter((h) => h.days.includes(dow));
   const habitsDone = habitsToday.filter((h) => h.history[today]).length;
