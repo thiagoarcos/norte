@@ -349,6 +349,7 @@ const ytLink = (name) => `https://www.youtube.com/results?search_query=${encodeU
 /* ---------- PIN de bloqueo ---------- */
 const PIN_KEY = "nexofit-pin-hash-v1";
 const PIN_SESSION = "nexofit-unlocked";
+const PIN_OPTOUT = "nexofit-pin-optout"; // "1" solo si el usuario quitó el PIN a propósito
 const BIO_KEY = "nexofit-bio-cred-v1"; // id de la credencial WebAuthn (Face ID / huella)
 
 async function hashPin(pin) {
@@ -862,6 +863,7 @@ function PinGate({ theme, onUnlock }) {
         if (pin !== pin2) { setError("Los PIN no coinciden"); setPin(""); setPin2(""); return; }
         const h = await hashPin(pin);
         localStorage.setItem(PIN_KEY, h);
+        localStorage.removeItem(PIN_OPTOUT);
         sessionStorage.setItem(PIN_SESSION, "1");
         onUnlock();
       }
@@ -1006,9 +1008,12 @@ export default function App() {
   const [loaded, setLoaded] = useState(false);
   const [locked, setLocked] = useState(() => {
     try {
+      if (sessionStorage.getItem(PIN_SESSION) === "1") return false;
       const hasPin = !!localStorage.getItem(PIN_KEY);
-      const unlocked = sessionStorage.getItem(PIN_SESSION) === "1";
-      return hasPin && !unlocked;
+      const optedOut = localStorage.getItem(PIN_OPTOUT) === "1";
+      // Acceso prohibido por defecto: bloqueá siempre salvo que se haya quitado el PIN a propósito.
+      // Sin PIN y sin opt-out ⇒ primera vez ⇒ obliga a crear uno.
+      return hasPin || !optedOut;
     } catch (e) { return false; }
   });
   const [showPinSetup, setShowPinSetup] = useState(false);
@@ -2906,6 +2911,7 @@ export default function App() {
                       <Btn small kind="danger" onClick={() => {
                         if (confirm("¿Quitar el PIN? Cualquiera con el link va a poder abrir la app.")) {
                           localStorage.removeItem(PIN_KEY);
+                          localStorage.setItem(PIN_OPTOUT, "1");
                           sessionStorage.removeItem(PIN_SESSION);
                           setBanner("PIN quitado");
                           setTimeout(() => setBanner(null), 3000);

@@ -26,11 +26,15 @@ jobs:
         with:
           node-version: 20
 
+      # npm ci borra node_modules y reinstala limpio desde el lock:
+      # restaura el bit de ejecución del binario de vite (el repo commitea node_modules
+      # y el shim .bin/vite venía sin permiso de ejecución → "vite: Permission denied").
       - name: Install
-        run: npm install
+        run: npm ci
 
+      # Invocamos vite vía npx (lo corre con Node, sin depender del bit de ejecución del shim).
       - name: Build
-        run: npm run build
+        run: npx --no-install vite build
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
