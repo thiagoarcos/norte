@@ -590,14 +590,17 @@ function Ring({ pct, size = 120, stroke = 12, color, children }) {
   const col = color || C.primary;
   const r = (size - stroke) / 2;
   const circ = 2 * Math.PI * r;
-  const off = circ * (1 - Math.min(1, Math.max(0, pct)));
+  const target = circ * (1 - Math.min(1, Math.max(0, pct)));
+  // arranca vacío y se llena al montar / al cambiar el porcentaje
+  const [off, setOff] = useState(circ);
+  useEffect(() => { const t = setTimeout(() => setOff(target), 60); return () => clearTimeout(t); }, [target, circ]);
   return (
     <div style={{ position: "relative", width: size, height: size, flexShrink: 0 }}>
       <svg width={size} height={size} style={{ transform: "rotate(-90deg)" }}>
         <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={C.line} strokeWidth={stroke} />
         <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={col} strokeWidth={stroke}
           strokeDasharray={circ} strokeDashoffset={off} strokeLinecap="round"
-          style={{ transition: "stroke-dashoffset 0.6s ease" }} />
+          style={{ transition: "stroke-dashoffset 0.9s cubic-bezier(0.22,1,0.36,1)" }} />
       </svg>
       <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
         {children}
@@ -614,8 +617,13 @@ function Check({ done, onClick, color }) {
         width: 30, height: 30, borderRadius: 15, border: done ? "none" : `2px solid ${C.line}`,
         background: done ? col : "transparent", color: "#fff",
         display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0,
-      }}>
-      {done ? <CheckIcon size={16} strokeWidth={3} /> : null}
+        transition: "background 0.2s ease, border-color 0.2s ease, transform 0.12s ease",
+        boxShadow: done ? `0 4px 12px ${C.primaryGlow}` : "none",
+      }}
+      onPointerDown={(e) => { e.currentTarget.style.transform = "scale(0.85)"; }}
+      onPointerUp={(e) => { e.currentTarget.style.transform = "scale(1)"; }}
+      onPointerLeave={(e) => { e.currentTarget.style.transform = "scale(1)"; }}>
+      {done ? <CheckIcon size={16} strokeWidth={3} style={{ animation: "nortePop 0.32s ease" }} /> : null}
     </button>
   );
 }
@@ -637,7 +645,11 @@ function Btn({ children, onClick, kind = "primary", small, style }) {
     danger: { background: "transparent", color: C.red },
     dark: { background: C.ink, color: C.bg },
   };
-  return <button onClick={onClick} style={{ ...base, ...kinds[kind], ...style }}>{children}</button>;
+  return <button onClick={onClick}
+    onPointerDown={(e) => { e.currentTarget.style.transform = "scale(0.94)"; }}
+    onPointerUp={(e) => { e.currentTarget.style.transform = "scale(1)"; }}
+    onPointerLeave={(e) => { e.currentTarget.style.transform = "scale(1)"; }}
+    style={{ ...base, transition: "transform 0.12s ease, box-shadow 0.2s ease, filter 0.2s ease", ...kinds[kind], ...style }}>{children}</button>;
 }
 
 function Input(props) {
@@ -1527,6 +1539,8 @@ export default function App() {
   /* ============ HOY ============ */
   function Hoy() {
     const showInstall = !installed && !installHidden;
+    const hr = todayDate.getHours();
+    const greet = hr < 6 ? "Buenas noches" : hr < 13 ? "Buen día" : hr < 20 ? "Buenas tardes" : "Buenas noches";
     return (
       <>
         <div style={{ padding: "4px 4px 0", display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
@@ -1534,7 +1548,7 @@ export default function App() {
             <div style={{ fontSize: 11.5, fontWeight: 700, color: C.primary, textTransform: "uppercase", letterSpacing: 1.2 }}>
               {DAY_NAMES[dow]}, {todayDate.getDate()} de {MONTHS[todayDate.getMonth()]}
             </div>
-            <h1 style={{ margin: "4px 0 14px", fontSize: 34, fontWeight: 800, letterSpacing: -0.8, lineHeight: 1 }}>Hoy</h1>
+            <h1 style={{ margin: "4px 0 14px", fontSize: 31, fontWeight: 800, letterSpacing: -0.8, lineHeight: 1.05 }}>{greet}</h1>
           </div>
           <div style={{ display: "flex", gap: 8 }}>
             <Btn kind="soft" small onClick={() => setShowChat(true)} style={{ display: "flex" }}>
