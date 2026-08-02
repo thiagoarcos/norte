@@ -1240,6 +1240,36 @@ export default function App() {
     if (chatScrollRef.current) chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
   }, [chatMsgs, chatBusy, showChat]);
 
+  // Comandos que NEXO manda a la app (crear/borrar bloques de Agenda, recordatorios)
+  const applyCmd = (c) => {
+    if (!c || !c.type) return;
+    if (c.type === "agenda_add") {
+      up((s) => { s.schedule = [...(s.schedule || []), { id: uid(), who: c.who === "novia" ? "novia" : "yo", title: c.title || "Bloque", day: Number(c.day) || 0, start: c.start || "18:00", end: c.end || "" }]; return s; });
+      flash(`🤖 NEXO agregó a tu agenda: ${c.title || "bloque"}${c.start ? " · " + c.start : ""}`);
+    } else if (c.type === "agenda_remove") {
+      up((s) => { s.schedule = (s.schedule || []).filter((e) => !(e.day === Number(c.day) && (!c.title || (e.title || "").toLowerCase().includes(String(c.title).toLowerCase())))); return s; });
+      flash(`🤖 NEXO sacó de tu agenda: ${c.title || "un bloque"}`);
+    } else if (c.type === "reminder_add") {
+      up((s) => { s.reminders = [...(s.reminders || []), { id: uid(), text: c.text || "Recordatorio", time: c.time || "18:00", days: Array.isArray(c.days) && c.days.length ? c.days : [0, 1, 2, 3, 4, 5, 6] }]; return s; });
+      flash(`🤖 NEXO agregó un recordatorio: ${c.text || ""}`);
+    }
+  };
+
+  useEffect(() => {
+    if (!pushReady) return;
+    let alive = true;
+    (async () => {
+      while (alive) {
+        const r = await pushCall("/cmd/poll"); // long-poll ~20s
+        if (!alive) break;
+        if (!r || !r.ok) { await new Promise((res) => setTimeout(res, 3000)); continue; }
+        const j = await r.json().catch(() => null);
+        for (const c of (j && j.commands) || []) applyCmd(c);
+      }
+    })();
+    return () => { alive = false; };
+  }, [pushReady]);
+
   const startTimer = (secs) => {
     setTimerTotal(secs);
     setTimerNow(Date.now());

@@ -119,6 +119,17 @@ export class Scheduler {
       return json(snap || { schedule: [], at: 0 });
     }
 
+    /* ---------- Comandos de NEXO hacia la app (agenda/recordatorios por voz o chat) ---------- */
+    if (url.pathname === "/cmd/push") {
+      const cmd = body && body.type ? body : null;
+      if (!cmd) return json({ error: "comando inválido" }, 400);
+      await this.state.storage.put(`cmd:${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, { ...cmd, at: Date.now() });
+      return json({ ok: true });
+    }
+    if (url.pathname === "/cmd/poll") {
+      return json({ commands: await this.waitDrain("cmd:", 20000) });
+    }
+
     return json({ error: "not found" }, 404);
   }
 
