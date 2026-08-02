@@ -2,9 +2,9 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 
-// IMPORTANTE: si tu repo se llama distinto a "nexofit", cambiá esta línea.
-// Ejemplo: si el repo es "mi-app-fitness", poné base: "/mi-app-fitness/".
-const BASE = "/nexofit/";
+// IMPORTANTE: el base tiene que ser "/<nombre-del-repo>/" (GitHub Pages sirve ahí).
+// El repo es github.com/thiagoarcos/norte → base "/norte/". Si renombrás el repo, cambialo acá.
+const BASE = "/norte/";
 
 export default defineConfig({
   base: BASE,

@@ -10,8 +10,8 @@ self.addEventListener("push", (event) => {
   event.waitUntil(
     self.registration.showNotification(data.title || "NORTE", {
       body: data.body || "",
-      icon: "/nexofit/icon-192.png",
-      badge: "/nexofit/icon-192.png",
+      icon: "/norte/icon-192.png",
+      badge: "/norte/icon-192.png",
       tag: data.tag,
     }),
   );
@@ -21,7 +21,7 @@ self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((wins) =>
-      wins.length ? wins[0].focus() : self.clients.openWindow("/nexofit/"),
+      wins.length ? wins[0].focus() : self.clients.openWindow("/norte/"),
     ),
   );
 });
