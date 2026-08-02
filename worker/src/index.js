@@ -75,7 +75,59 @@ export class Scheduler {
       });
     }
 
+    /* ---------- Relay de chat NEXO FIT ⇄ NEXO ----------
+       cin:  = mensajes de la app hacia NEXO (los consume nexo_bridge.py)
+       cout: = respuestas de NEXO hacia la app
+       Prefijos elegidos para NO colisionar con "n:" (cola de notificaciones). */
+    if (url.pathname === "/chat/send") {
+      const text = (body.text || "").toString().trim();
+      if (!text) return json({ error: "sin texto" }, 400);
+      const id = (body.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`).toString();
+      await this.state.storage.put("cin:" + id, { id, text, at: Date.now() });
+      return json({ ok: true, id });
+    }
+
+    if (url.pathname === "/chat/pull") {
+      // el bridge llama acá (long-poll): marca presencia y drena lo pendiente para NEXO
+      await this.state.storage.put("bridge_seen", Date.now());
+      return json({ messages: await this.waitDrain("cin:", 20000) });
+    }
+
+    if (url.pathname === "/chat/reply") {
+      if (!body.id || body.text == null) return json({ error: "faltan id/text" }, 400);
+      await this.state.storage.put("cout:" + body.id, { id: body.id.toString(), text: body.text.toString(), at: Date.now() });
+      return json({ ok: true });
+    }
+
+    if (url.pathname === "/chat/poll") {
+      // la app llama acá (long-poll) esperando la respuesta de NEXO
+      return json({ replies: await this.waitDrain("cout:", 20000) });
+    }
+
+    if (url.pathname === "/chat/status") {
+      const seen = (await this.state.storage.get("bridge_seen")) || 0;
+      return json({ online: Date.now() - seen < 40000, lastSeen: seen });
+    }
+
     return json({ error: "not found" }, 404);
+  }
+
+  async drain(prefix) {
+    const all = await this.state.storage.list({ prefix });
+    const items = [...all.values()].sort((a, b) => a.at - b.at);
+    for (const k of all.keys()) await this.state.storage.delete(k);
+    return items;
+  }
+
+  // Long-poll: drena apenas hay algo, o devuelve [] al llegar a maxMs.
+  async waitDrain(prefix, maxMs) {
+    const end = Date.now() + maxMs;
+    for (;;) {
+      const items = await this.drain(prefix);
+      if (items.length) return items;
+      if (Date.now() >= end) return [];
+      await new Promise((r) => setTimeout(r, 600));
+    }
   }
 
   async resetAlarm() {

@@ -3,6 +3,7 @@ import {
   Target, Dumbbell, Sun, Moon, Salad, Settings, Trophy, Flame, Zap, Droplet,
   TrendingUp, Apple, Sprout, Lock, Unlock, Bell, Lightbulb, Smartphone, X, Calendar,
   Upload, Award, PersonStanding, Check as CheckIcon, Video, Pencil, AlertTriangle, ScanFace,
+  Bot, Send,
 } from "lucide-react";
 
 /* ============ NORTE (ex NEXO FIT) v4 ============
@@ -1041,6 +1042,11 @@ export default function App() {
   const [timerTotal, setTimerTotal] = useState(60);
   const [confirmReset, setConfirmReset] = useState(false);
   const [showCalc, setShowCalc] = useState(false);
+  const [showChat, setShowChat] = useState(false);
+  const [chatMsgs, setChatMsgs] = useState([]);
+  const [chatInput, setChatInput] = useState("");
+  const [chatBusy, setChatBusy] = useState(false);
+  const chatScrollRef = useRef(null);
   const firedRef = useRef({});
   const saveTimer = useRef(null);
 
@@ -1162,6 +1168,46 @@ export default function App() {
       });
     } catch (e) { return null; }
   };
+
+  // Chat con NEXO (asistente) vía el relay del worker. Requiere el bridge corriendo en la PC.
+  const sendChat = async () => {
+    const text = chatInput.trim();
+    if (!text || chatBusy) return;
+    if (!pushCfg.url || !pushCfg.token) {
+      flash("Configurá el servidor en Más → Notificaciones para hablar con NEXO");
+      return;
+    }
+    const id = uid();
+    setChatMsgs((m) => [...m, { id, role: "me", text }]);
+    setChatInput("");
+    setChatBusy(true);
+    try {
+      const r = await pushCall("/chat/send", { id, text });
+      if (!r || !r.ok) {
+        setChatMsgs((m) => [...m, { id: uid(), role: "nexo", text: "No pude contactar el relay. ¿El servidor está bien configurado en Más?" }]);
+        setChatBusy(false);
+        return;
+      }
+      const deadline = Date.now() + 70000; // el bridge + NEXO pueden tardar unos segundos
+      let answered = false;
+      while (Date.now() < deadline && !answered) {
+        const pr = await pushCall("/chat/poll"); // long-poll ~20s en el server
+        if (!pr || !pr.ok) break;
+        const pj = await pr.json().catch(() => null);
+        for (const rep of (pj && pj.replies) || []) {
+          if (rep.id === id) { setChatMsgs((m) => [...m, { id: uid(), role: "nexo", text: rep.text }]); answered = true; }
+        }
+      }
+      if (!answered) setChatMsgs((m) => [...m, { id: uid(), role: "nexo", text: "NEXO no respondió. ¿Está corriendo nexo_bridge.py en tu PC (con NEXO prendido)?" }]);
+    } catch (e) {
+      setChatMsgs((m) => [...m, { id: uid(), role: "nexo", text: "Error de conexión." }]);
+    }
+    setChatBusy(false);
+  };
+
+  useEffect(() => {
+    if (chatScrollRef.current) chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+  }, [chatMsgs, chatBusy, showChat]);
 
   const startTimer = (secs) => {
     setTimerTotal(secs);
@@ -1452,9 +1498,14 @@ export default function App() {
             </div>
             <h1 style={{ margin: "4px 0 14px", fontSize: 34, fontWeight: 800, letterSpacing: -0.8, lineHeight: 1 }}>Hoy</h1>
           </div>
-          <Btn kind="soft" small onClick={() => up((s) => { s.theme = s.theme === "dark" ? "light" : "dark"; return s; })}>
-            {state.theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
-          </Btn>
+          <div style={{ display: "flex", gap: 8 }}>
+            <Btn kind="soft" small onClick={() => setShowChat(true)} style={{ display: "flex" }}>
+              <Bot size={16} />
+            </Btn>
+            <Btn kind="soft" small onClick={() => up((s) => { s.theme = s.theme === "dark" ? "light" : "dark"; return s; })}>
+              {state.theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+            </Btn>
+          </div>
         </div>
 
         {showInstall && (
@@ -3095,6 +3146,54 @@ export default function App() {
         }}>
           <span style={{ display: "flex", alignItems: "center", gap: 8 }}><Bell size={16} />{banner}</span>
           <button onClick={() => setBanner(null)} style={{ background: "none", border: "none", color: C.bg, cursor: "pointer", display: "flex" }}><X size={16} /></button>
+        </div>
+      )}
+
+      {showChat && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 60, background: C.bg, display: "flex", flexDirection: "column", fontFamily: FONT }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "calc(12px + env(safe-area-inset-top)) 16px 12px", borderBottom: `1px solid ${C.line}`, background: C.card }}>
+            <div style={{ width: 36, height: 36, borderRadius: 12, background: `linear-gradient(135deg, ${C.primary}, ${C.accent})`, display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <Bot size={20} color="#fff" />
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 800, fontSize: 16 }}>NEXO</div>
+              <div style={{ fontSize: 11.5, color: C.sub, fontWeight: 600 }}>Tu asistente</div>
+            </div>
+            <button onClick={() => setShowChat(false)} style={{ background: "none", border: "none", color: C.sub, cursor: "pointer", display: "flex" }}><X size={22} /></button>
+          </div>
+
+          <div ref={chatScrollRef} style={{ flex: 1, overflowY: "auto", padding: "16px 14px", display: "flex", flexDirection: "column", gap: 10 }}>
+            {chatMsgs.length === 0 && (
+              <div style={{ margin: "auto", textAlign: "center", color: C.sub, maxWidth: 290 }}>
+                <Bot size={40} style={{ opacity: 0.5, marginBottom: 10 }} />
+                <div style={{ fontSize: 14, fontWeight: 600, lineHeight: 1.5 }}>
+                  Escribile a NEXO. Necesitás el servidor configurado (en <b>Más</b>) y <b>nexo_bridge.py</b> corriendo en tu PC con NEXO prendido.
+                </div>
+              </div>
+            )}
+            {chatMsgs.map((m) => (
+              <div key={m.id} style={{ alignSelf: m.role === "me" ? "flex-end" : "flex-start", maxWidth: "82%" }}>
+                <div style={{
+                  padding: "10px 13px", borderRadius: 16, fontSize: 14.5, lineHeight: 1.4, whiteSpace: "pre-wrap", wordBreak: "break-word",
+                  background: m.role === "me" ? `linear-gradient(135deg, ${C.primary}, ${C.accent})` : C.card,
+                  color: m.role === "me" ? "#fff" : C.ink,
+                  border: m.role === "me" ? "none" : `1px solid ${C.line}`,
+                  borderBottomRightRadius: m.role === "me" ? 4 : 16,
+                  borderBottomLeftRadius: m.role === "me" ? 16 : 4,
+                }}>{m.text}</div>
+              </div>
+            ))}
+            {chatBusy && (
+              <div style={{ alignSelf: "flex-start", color: C.sub, fontSize: 13, fontWeight: 600, padding: "6px 4px" }}>NEXO está pensando…</div>
+            )}
+          </div>
+
+          <div style={{ display: "flex", gap: 8, padding: "12px 14px calc(12px + env(safe-area-inset-bottom))", borderTop: `1px solid ${C.line}`, background: C.card }}>
+            <Input value={chatInput} placeholder="Escribí un mensaje…" style={{ flex: 1 }}
+              onChange={(e) => setChatInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); } }} />
+            <Btn onClick={sendChat} style={{ display: "flex", alignItems: "center" }}><Send size={16} /></Btn>
+          </div>
         </div>
       )}
 
