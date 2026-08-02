@@ -527,6 +527,7 @@ const initialState = {
   customTips: [],
   cut: null,
   push: { url: "", token: "", enabled: false },
+  agendaAlerts: { on: true, lead: 15 }, // avisar `lead` minutos antes de cada bloque
   // Cronograma: who = "yo" | "novia"; day 0=Dom..6=Sáb; end vacío = aviso puntual
   schedule: [
     // Novia
@@ -1128,11 +1129,29 @@ export default function App() {
           setTimeout(() => setBanner(null), 12000);
         }
       });
+      // Avisos de la Agenda: `lead` minutos antes de cada bloque del día
+      const aa = state.agendaAlerts || { on: true, lead: 15 };
+      if (aa.on) {
+        (state.schedule || []).forEach((e) => {
+          if (e.day !== now.getDay() || !e.start) return;
+          const [hh, mm] = e.start.split(":").map(Number);
+          const at = new Date(now); at.setHours(hh || 0, mm || 0, 0, 0);
+          const notifyAt = new Date(at.getTime() - (aa.lead || 0) * 60000);
+          const nk = `ag-${notifyAt.getHours()}:${notifyAt.getMinutes()}` === `ag-${now.getHours()}:${now.getMinutes()}`;
+          const key = `agenda-${e.id}-${dstr(now)}`;
+          if (nk && !firedRef.current[key]) {
+            firedRef.current[key] = true;
+            const who = e.who === "novia" ? "Novia" : "Vos";
+            setBanner(`⏰ En ${aa.lead} min · ${e.title} (${e.start})${e.who === "novia" ? " — " + who : ""}`);
+            setTimeout(() => setBanner(null), 12000);
+          }
+        });
+      }
     };
     const iv = setInterval(check, 20000);
     check();
     return () => clearInterval(iv);
-  }, [state.reminders]);
+  }, [state.reminders, state.schedule, state.agendaAlerts]);
 
   /* Temporizador anclado a la hora de fin: aunque iOS congele el JS en segundo
      plano, al volver muestra el tiempo real restante (no se atrasa). */
@@ -1280,6 +1299,25 @@ export default function App() {
         if (t.getTime() > Date.now())
           items.push({ id: `rem-${r.id}-${ds}`, at: t.getTime(), title: "NORTE", body: r.text, ttl: 1800 });
       });
+      // Bloques de la Agenda: push `lead` min antes
+      const aa = state.agendaAlerts || { on: true, lead: 15 };
+      if (aa.on) {
+        (state.schedule || []).forEach((e) => {
+          if (e.day !== d.getDay() || !e.start) return;
+          const [hh, mm] = e.start.split(":").map(Number);
+          const t = new Date(d);
+          t.setHours(hh || 0, mm || 0, 0, 0);
+          const at = t.getTime() - (aa.lead || 0) * 60000;
+          if (at > Date.now()) {
+            const rango = e.end ? `${e.start}–${e.end}` : e.start;
+            items.push({
+              id: `agenda-${e.id}-${ds}`, at, ttl: 1800,
+              title: e.who === "novia" ? "Agenda · Novia" : "Agenda",
+              body: `⏰ ${e.title} · ${rango} (en ${aa.lead} min)`,
+            });
+          }
+        });
+      }
       if (state.cut) {
         const t = new Date(d);
         t.setHours(17, 0, 0, 0);
@@ -1290,7 +1328,7 @@ export default function App() {
       }
     }
     if (items.length) pushCall("/schedule", items);
-  }, [pushReady, state.reminders, cutActive]);
+  }, [pushReady, state.reminders, state.schedule, state.agendaAlerts, cutActive]);
 
   /* ---------- métricas ---------- */
   const habitsToday = state.habits.filter((h) => h.days.includes(dow));
@@ -2712,6 +2750,13 @@ export default function App() {
     const evts = state.schedule || [];
     const fmt = (e) => (e.end ? `${e.start}–${e.end}` : e.start);
     const byDay = (d) => evts.filter((e) => e.day === d).sort((a, b) => a.start.localeCompare(b.start));
+    const aa = state.agendaAlerts || { on: true, lead: 15 };
+    const nowMin = todayDate.getHours() * 60 + todayDate.getMinutes();
+    const nextId = evts
+      .filter((e) => e.day === dow && e.start)
+      .map((e) => ({ id: e.id, min: (e.start.split(":").map(Number)[0]) * 60 + (e.start.split(":").map(Number)[1]) }))
+      .filter((e) => e.min >= nowMin)
+      .sort((a, b) => a.min - b.min)[0]?.id;
 
     // helpers llamados inline (no como <Componente/>) para no remontar los inputs y perder el foco
     const daySingle = (value, onPick) => (
@@ -2745,12 +2790,23 @@ export default function App() {
     return (
       <>
         <PageHeader title="Agenda" subtitle="Tu cronograma y el de tu novia" />
-        <div style={{ display: "flex", gap: 14, margin: "0 4px 14px" }}>
-          {Object.values(OWNER).map((o) => (
-            <div key={o.label} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, fontWeight: 700, color: C.sub }}>
-              <span style={{ width: 12, height: 12, borderRadius: 4, background: o.color }} />{o.label}
-            </div>
-          ))}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, margin: "0 4px 12px", flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 14 }}>
+            {Object.values(OWNER).map((o) => (
+              <div key={o.label} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, fontWeight: 700, color: C.sub }}>
+                <span style={{ width: 12, height: 12, borderRadius: 4, background: o.color }} />{o.label}
+              </div>
+            ))}
+          </div>
+          <button onClick={() => up((s) => { const a = s.agendaAlerts || { on: true, lead: 15 }; s.agendaAlerts = { ...a, on: !a.on }; return s; })}
+            style={{
+              display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontFamily: FONT,
+              border: `1px solid ${aa.on ? "transparent" : C.line}`, borderRadius: 999, padding: "6px 11px",
+              background: aa.on ? C.primarySoft : C.card, color: aa.on ? C.primaryInk : C.sub,
+              fontSize: 12, fontWeight: 800, transition: "all 0.2s",
+            }}>
+            <Bell size={13} /> {aa.on ? `Avisos ${aa.lead}′ antes` : "Avisos off"}
+          </button>
         </div>
 
         {ORDER.map((d) => {
@@ -2767,15 +2823,23 @@ export default function App() {
               ) : list.map((e) => {
                 const o = OWNER[e.who] || OWNER.yo;
                 const editing = editEvt === e.id;
+                const isNext = e.id === nextId;
                 return (
-                  <Card key={e.id} style={{ marginBottom: 8, padding: 0, overflow: "hidden" }}>
+                  <Card key={e.id} style={{
+                    marginBottom: 8, padding: 0, overflow: "hidden",
+                    border: isNext ? `1.5px solid ${C.primary}` : undefined,
+                    boxShadow: isNext ? `0 0 0 4px ${C.primaryGlow}, 0 8px 24px ${C.primaryGlow}` : undefined,
+                  }}>
                     <div style={{ display: "flex", alignItems: "stretch" }}>
                       <div style={{ width: 5, background: o.color, flexShrink: 0 }} />
                       <div style={{ flex: 1, padding: "12px 14px", minWidth: 0 }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                           <div style={{ background: o.soft, color: o.ink, fontWeight: 800, fontSize: 12.5, borderRadius: 8, padding: "5px 9px", whiteSpace: "nowrap" }}>{fmt(e)}</div>
                           <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ fontWeight: 700, fontSize: 15, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.title || "—"}</div>
+                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              <div style={{ fontWeight: 700, fontSize: 15, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.title || "—"}</div>
+                              {isNext && <span style={{ fontSize: 9, fontWeight: 900, color: "#fff", background: C.primary, borderRadius: 5, padding: "2px 6px", letterSpacing: 0.4, flexShrink: 0, animation: "nortePulse 2.2s ease-in-out infinite" }}>PRÓXIMO</span>}
+                            </div>
                             <div style={{ fontSize: 11.5, color: o.color, fontWeight: 700 }}>{o.label}</div>
                           </div>
                           <Btn kind="soft" small onClick={() => setEditEvt(editing ? null : e.id)} style={{ display: "flex" }}>{editing ? "Listo" : <Pencil size={14} />}</Btn>
@@ -3117,7 +3181,6 @@ export default function App() {
     { id: "dieta", label: "Dieta", Icon: Salad },
     { id: "mas", label: "Más", Icon: Settings },
   ];
-  const activeTabIdx = tabs.findIndex((t) => t.id === tab);
 
   if (!loaded) {
     return (
@@ -3150,7 +3213,7 @@ export default function App() {
       )}
 
       {showChat && (
-        <div style={{ position: "fixed", inset: 0, zIndex: 60, background: C.bg, display: "flex", flexDirection: "column", fontFamily: FONT }}>
+        <div style={{ position: "fixed", inset: 0, zIndex: 60, background: C.bg, display: "flex", flexDirection: "column", fontFamily: FONT, animation: "norteSlideUp 0.3s cubic-bezier(0.22,1,0.36,1)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "calc(12px + env(safe-area-inset-top)) 16px 12px", borderBottom: `1px solid ${C.line}`, background: C.card }}>
             <div style={{ width: 36, height: 36, borderRadius: 12, background: `linear-gradient(135deg, ${C.primary}, ${C.accent})`, display: "flex", alignItems: "center", justifyContent: "center" }}>
               <Bot size={20} color="#fff" />
@@ -3198,46 +3261,46 @@ export default function App() {
       )}
 
       <div style={{ maxWidth: 520, margin: "0 auto", padding: "16px 14px 120px" }}>
-        {tab === "hoy" && Hoy()}
-        {tab === "agenda" && Agenda()}
-        {tab === "habitos" && Habitos()}
-        {tab === "gym" && Gym()}
-        {tab === "dieta" && Dieta()}
-        {tab === "mas" && Mas()}
+        <div key={tab} style={{ animation: "norteFadeUp 0.34s cubic-bezier(0.22,1,0.36,1) both" }}>
+          {tab === "hoy" && Hoy()}
+          {tab === "agenda" && Agenda()}
+          {tab === "habitos" && Habitos()}
+          {tab === "gym" && Gym()}
+          {tab === "dieta" && Dieta()}
+          {tab === "mas" && Mas()}
+        </div>
       </div>
 
       <nav style={{
         position: "fixed", bottom: "calc(14px + env(safe-area-inset-bottom))",
         left: 12, right: 12, zIndex: 40,
         maxWidth: 500, margin: "0 auto",
-        background: C.navBg, backdropFilter: "blur(20px)",
-        WebkitBackdropFilter: "blur(20px)",
+        background: C.navBg, backdropFilter: "blur(24px) saturate(180%)",
+        WebkitBackdropFilter: "blur(24px) saturate(180%)",
         border: `1px solid ${C.line}`,
-        borderRadius: 22, display: "flex",
-        padding: "8px 6px", boxShadow: "0 8px 32px rgba(0,0,0,0.08)",
+        borderRadius: 24, display: "flex", gap: 4,
+        padding: 7, boxShadow: "0 10px 40px rgba(0,0,0,0.14), 0 2px 8px rgba(0,0,0,0.06)",
       }}>
-        <div style={{
-          position: "absolute", top: 8, bottom: 8,
-          left: `calc(6px + ${activeTabIdx} * (100% - 12px) / ${tabs.length})`,
-          width: `calc((100% - 12px) / ${tabs.length})`,
-          background: C.primarySoft, borderRadius: 14,
-          transition: "left 0.35s cubic-bezier(0.34, 1.56, 0.64, 1)",
-        }} />
         {tabs.map((t) => {
           const active = tab === t.id;
           return (
-            <button key={t.id} onClick={() => setTab(t.id)} style={{
-              position: "relative", zIndex: 1, flex: 1,
-              background: "transparent",
+            <button key={t.id} onClick={() => setTab(t.id)} aria-label={t.label} style={{
+              flex: active ? "2.4 1 0%" : "1 1 0%", minWidth: 0,
               border: "none", cursor: "pointer", fontFamily: FONT,
-              display: "flex", flexDirection: "column", alignItems: "center", gap: 2,
-              color: active ? C.primary : C.sub,
-              borderRadius: 14, padding: "8px 4px",
-              transition: "color 0.2s, transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1)",
-              transform: active ? "scale(1.06)" : "scale(1)",
-            }}>
-              <t.Icon size={19} strokeWidth={active ? 2.4 : 2} style={{ opacity: active ? 1 : 0.75 }} />
-              <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: 0.2 }}>{t.label}</span>
+              display: "flex", flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7,
+              background: active ? `linear-gradient(135deg, ${C.primary}, ${C.accent})` : "transparent",
+              color: active ? "#fff" : C.sub,
+              borderRadius: 17, padding: "11px 6px", overflow: "hidden", whiteSpace: "nowrap",
+              boxShadow: active ? `0 6px 18px ${C.primaryGlow}` : "none",
+              transition: "flex-grow 0.4s cubic-bezier(0.22,1,0.36,1), background 0.3s ease, color 0.25s ease, box-shadow 0.3s ease",
+            }}
+            onTouchStart={(e) => { if (!active) e.currentTarget.style.transform = "scale(0.92)"; }}
+            onTouchEnd={(e) => { e.currentTarget.style.transform = "scale(1)"; }}
+            >
+              <t.Icon size={20} strokeWidth={active ? 2.6 : 2} style={{ flexShrink: 0 }} />
+              {active && (
+                <span style={{ fontSize: 12.5, fontWeight: 800, letterSpacing: -0.1, animation: "norteFadeIn 0.35s ease both" }}>{t.label}</span>
+              )}
             </button>
           );
         })}

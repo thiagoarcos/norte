@@ -26,8 +26,17 @@
       @media (prefers-color-scheme: dark) {
         html, body, #root { background: #08090C; }
       }
+      /* Animaciones globales de NORTE */
+      @keyframes norteFadeUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+      @keyframes norteSlideUp { from { transform: translateY(100%); } to { transform: none; } }
+      @keyframes nortePop { 0% { transform: scale(0.85); } 60% { transform: scale(1.06); } 100% { transform: scale(1); } }
+      @keyframes norteFadeIn { from { opacity: 0; } to { opacity: 1; } }
+      @keyframes nortePulse { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
+      @media (prefers-reduced-motion: reduce) {
+        * { animation-duration: 0.001ms !important; }
+      }
     </style>
-    <script type="module" crossorigin src="/norte/assets/index-DNbsTiu-.js"></script>
+    <script type="module" crossorigin src="/norte/assets/index-lmlnc3Ev.js"></script>
   <link rel="manifest" href="/norte/manifest.webmanifest"><script id="vite-plugin-pwa:register-sw" src="/norte/registerSW.js"></script></head>
   <body>
     <div id="root"></div>
