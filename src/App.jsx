@@ -3,7 +3,7 @@ import {
   Target, Dumbbell, Sun, Moon, Salad, Settings, Trophy, Flame, Zap, Droplet,
   TrendingUp, Apple, Sprout, Lock, Unlock, Bell, Lightbulb, Smartphone, X, Calendar,
   Upload, Award, PersonStanding, Check as CheckIcon, Video, Pencil, AlertTriangle, ScanFace,
-  Bot, Send,
+  Bot, Send, Pause, Play, Clock,
 } from "lucide-react";
 
 /* ============ NORTE (ex NEXO FIT) v4 ============
@@ -346,6 +346,8 @@ const fmtDate = (key) => {
   return `${DAY_NAMES[new Date(y, m - 1, d).getDay()].slice(0, 3)} ${d} ${MONTHS[m - 1].slice(0, 3)}`;
 };
 const ytLink = (name) => `https://www.youtube.com/results?search_query=${encodeURIComponent("como hacer " + name + " técnica")}`;
+const fmtClock = (s) => `${Math.floor(s / 60)}:${String(Math.max(0, s) % 60).padStart(2, "0")}`;
+const hm2min = (t) => { const [h, m] = String(t || "0:0").split(":").map(Number); return (h || 0) * 60 + (m || 0); };
 
 /* ---------- PIN de bloqueo ---------- */
 const PIN_KEY = "nexofit-pin-hash-v1";
@@ -1053,6 +1055,7 @@ export default function App() {
   const [timerEnd, setTimerEnd] = useState(null);
   const [timerNow, setTimerNow] = useState(Date.now());
   const [timerTotal, setTimerTotal] = useState(60);
+  const [timerPaused, setTimerPaused] = useState(null); // segundos restantes si está en pausa
   const [confirmReset, setConfirmReset] = useState(false);
   const [showCalc, setShowCalc] = useState(false);
   const [showChat, setShowChat] = useState(false);
@@ -1270,19 +1273,46 @@ export default function App() {
     return () => { alive = false; };
   }, [pushReady]);
 
-  const startTimer = (secs) => {
-    setTimerTotal(secs);
-    setTimerNow(Date.now());
-    setTimerEnd(Date.now() + secs * 1000);
+  const schedulePush = (at) => {
     if (pushReady)
       pushCall("/schedule", {
-        id: "timer", at: Date.now() + secs * 1000,
+        id: "timer", at,
         title: "⏱️ ¡Descanso terminado!", body: "Siguiente serie 💪", ttl: 120,
       });
   };
+  const startTimer = (secs) => {
+    setTimerPaused(null);
+    setTimerTotal(secs);
+    setTimerNow(Date.now());
+    const end = Date.now() + secs * 1000;
+    setTimerEnd(end);
+    schedulePush(end);
+  };
   const stopTimer = () => {
     setTimerEnd(null);
+    setTimerPaused(null);
     if (pushReady) pushCall("/cancel", { id: "timer" });
+  };
+  const pauseTimer = () => {
+    if (!timerEnd) return;
+    setTimerPaused(Math.max(1, Math.ceil((timerEnd - Date.now()) / 1000)));
+    setTimerEnd(null);
+    if (pushReady) pushCall("/cancel", { id: "timer" });
+  };
+  const resumeTimer = () => {
+    if (!timerPaused) return;
+    setTimerNow(Date.now());
+    const end = Date.now() + timerPaused * 1000;
+    setTimerEnd(end);
+    setTimerPaused(null);
+    schedulePush(end);
+  };
+  const addTimer = (secs) => {
+    if (!timerEnd) return;
+    const end = timerEnd + secs * 1000;
+    setTimerEnd(end);
+    setTimerTotal((t) => t + secs);
+    schedulePush(end);
   };
 
   const b64ToU8 = (s) => {
@@ -1765,33 +1795,59 @@ export default function App() {
           left: 12, right: 12, zIndex: 35, maxWidth: 500, margin: "0 auto",
           display: "flex", justifyContent: "center", pointerEvents: "none",
         }}>
-          {timer > 0 ? (
-            <div style={{
-              pointerEvents: "auto", background: C.card, border: `1px solid ${C.line}`, borderRadius: 999,
-              padding: "6px 10px 6px 6px", display: "flex", alignItems: "center", gap: 10,
-              boxShadow: "0 8px 24px rgba(0,0,0,0.14)",
-            }}>
-              <Ring pct={timer / timerTotal} size={40} stroke={5} color={C.amber}>
-                <div style={{ fontSize: 12, fontWeight: 800 }}>{timer}</div>
-              </Ring>
-              <div style={{ fontSize: 13, fontWeight: 700, color: C.sub }}>Descanso</div>
-              <button onClick={stopTimer} style={{
-                background: C.soft, border: "none", borderRadius: 999, width: 28, height: 28,
+          {timer > 0 || timerPaused ? (() => {
+            const paused = !!timerPaused;
+            const shown = paused ? timerPaused : timer;
+            const roundBtn = (onClick, node, extra = {}) => (
+              <button onClick={onClick} style={{
+                background: C.soft, border: "none", borderRadius: 14, width: 38, height: 38,
                 cursor: "pointer", color: C.sub, display: "flex", alignItems: "center", justifyContent: "center",
-              }}><X size={14} /></button>
-            </div>
-          ) : (
+                flexShrink: 0, transition: "transform 0.12s ease", ...extra,
+              }}
+                onPointerDown={(e) => { e.currentTarget.style.transform = "scale(0.9)"; }}
+                onPointerUp={(e) => { e.currentTarget.style.transform = "scale(1)"; }}
+                onPointerLeave={(e) => { e.currentTarget.style.transform = "scale(1)"; }}>{node}</button>
+            );
+            return (
+              <div style={{
+                pointerEvents: "auto", background: C.card, border: `1px solid ${C.line}`, borderRadius: 24,
+                padding: "10px 12px", display: "flex", alignItems: "center", gap: 12, width: "100%", maxWidth: 380,
+                boxShadow: `0 14px 36px rgba(0,0,0,0.22), 0 0 0 4px ${C.amberSoft}`,
+              }}>
+                <Ring pct={shown / timerTotal} size={58} stroke={6} color={C.amber}>
+                  <div style={{ fontSize: 15, fontWeight: 900, letterSpacing: -0.6, fontVariantNumeric: "tabular-nums" }}>{fmtClock(shown)}</div>
+                </Ring>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: -0.2 }}>Descanso</div>
+                  <div style={{ fontSize: 11.5, color: paused ? C.amberInk : C.sub, fontWeight: 700 }}>
+                    {paused ? "En pausa" : "Recuperá para la próxima serie"}
+                  </div>
+                </div>
+                {roundBtn(() => addTimer(30), <span style={{ fontSize: 11.5, fontWeight: 900 }}>+30</span>)}
+                {roundBtn(paused ? resumeTimer : pauseTimer,
+                  paused ? <Play size={16} fill="currentColor" /> : <Pause size={16} fill="currentColor" />,
+                  { background: C.amberSoft, color: C.amberInk })}
+                {roundBtn(stopTimer, <X size={16} />)}
+              </div>
+            );
+          })() : (
             <div style={{
-              pointerEvents: "auto", display: "flex", gap: 6, background: C.card,
-              border: `1px solid ${C.line}`, borderRadius: 999, padding: 6,
-              boxShadow: "0 8px 24px rgba(0,0,0,0.08)",
+              pointerEvents: "auto", display: "flex", alignItems: "center", gap: 8, background: C.card,
+              border: `1px solid ${C.line}`, borderRadius: 999, padding: "6px 6px 6px 14px",
+              boxShadow: "0 8px 24px rgba(0,0,0,0.10)",
             }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, color: C.sub, fontWeight: 800, fontSize: 12.5, paddingRight: 2 }}>
+                <Clock size={15} /> Descanso
+              </div>
               {[60, 90, 120].map((t) => (
                 <button key={t} onClick={() => startTimer(t)} style={{
-                  border: "none", borderRadius: 999, padding: "8px 14px", cursor: "pointer",
-                  fontFamily: FONT, fontWeight: 800, fontSize: 12.5,
+                  border: "none", borderRadius: 999, padding: "9px 15px", cursor: "pointer",
+                  fontFamily: FONT, fontWeight: 800, fontSize: 13, transition: "transform 0.12s ease",
                   background: C.primarySoft, color: C.theme === "dark" ? C.primaryInk : C.primary,
-                }}>⏱ {t}s</button>
+                }}
+                  onPointerDown={(e) => { e.currentTarget.style.transform = "scale(0.92)"; }}
+                  onPointerUp={(e) => { e.currentTarget.style.transform = "scale(1)"; }}
+                  onPointerLeave={(e) => { e.currentTarget.style.transform = "scale(1)"; }}>{fmtClock(t)}</button>
               ))}
             </div>
           )}
@@ -1837,6 +1893,11 @@ export default function App() {
   }
 
   function Habitos() {
+    const iconBtnStyle = {
+      width: 30, height: 26, borderRadius: 8, border: "none", cursor: "pointer",
+      background: C.soft, color: C.sub, display: "flex", alignItems: "center", justifyContent: "center",
+      fontFamily: FONT,
+    };
     return (
       <>
         <PageHeader title="Hábitos" subtitle="Constancia diaria" />
@@ -1852,23 +1913,47 @@ export default function App() {
           const showMonth = habitMonth === h.id;
           return (
             <Card key={h.id} style={{ marginTop: 10 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-                <span style={{ fontSize: 20 }}>{h.icon}</span>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  {editing ? (
-                    <Input value={h.name} onChange={(e) => up((s) => {
-                      s.habits.find((x) => x.id === h.id).name = e.target.value; return s;
-                    })} />
-                  ) : (
-                    <>
-                      <div style={{ fontWeight: 700, fontSize: 15 }}>{h.name}</div>
-                      <div style={{ fontSize: 12.5, color: C.amber, fontWeight: 700, display: "flex", alignItems: "center", gap: 4 }}><Flame size={12} /> racha: {streak(h)}</div>
-                    </>
-                  )}
-                </div>
-                <Btn kind="ghost" small onClick={() => setHabitMonth(showMonth ? null : h.id)} style={{ display: "flex" }}>{showMonth ? "▲" : <Calendar size={14} />}</Btn>
-                <Btn kind="soft" small onClick={() => setEditHabit(editing ? null : h.id)} style={{ display: "flex" }}>{editing ? "Listo" : <Pencil size={14} />}</Btn>
-              </div>
+              {(() => {
+                const last7 = lastNDays(7);
+                const planned7 = last7.filter((d) => h.days.includes(d.getDay())).length;
+                const done7 = last7.filter((d) => h.history[dstr(d)]).length;
+                const weekPct = planned7 ? done7 / planned7 : (done7 ? 1 : 0);
+                const todayDone = !!h.history[today];
+                const st = streak(h);
+                return (
+                  <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10 }}>
+                    <Ring pct={weekPct} size={52} stroke={6} color={C.primary}>
+                      <span style={{ fontSize: 21 }}>{h.icon}</span>
+                    </Ring>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      {editing ? (
+                        <Input value={h.name} onChange={(e) => up((s) => {
+                          s.habits.find((x) => x.id === h.id).name = e.target.value; return s;
+                        })} />
+                      ) : (
+                        <>
+                          <div style={{ fontWeight: 800, fontSize: 15.5, letterSpacing: -0.2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{h.name}</div>
+                          <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 3 }}>
+                            <span style={{ fontSize: 12.5, color: st > 0 ? C.amber : C.sub, fontWeight: 800, display: "flex", alignItems: "center", gap: 3 }}><Flame size={12} /> {st}</span>
+                            <span style={{ fontSize: 12, color: C.sub, fontWeight: 700 }}>{done7}/{planned7 || 7} esta semana</span>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                    {!editing && (
+                      <Check done={todayDone} onClick={() => up((s) => {
+                        const hh = s.habits.find((x) => x.id === h.id);
+                        if (hh.history[today]) delete hh.history[today]; else hh.history[today] = true;
+                        return s;
+                      })} />
+                    )}
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4, flexShrink: 0 }}>
+                      <button onClick={() => setHabitMonth(showMonth ? null : h.id)} style={iconBtnStyle}>{showMonth ? <X size={14} /> : <Calendar size={14} />}</button>
+                      <button onClick={() => setEditHabit(editing ? null : h.id)} style={iconBtnStyle}>{editing ? <CheckIcon size={14} /> : <Pencil size={14} />}</button>
+                    </div>
+                  </div>
+                );
+              })()}
 
               {editing && (
                 <>
@@ -1903,19 +1988,24 @@ export default function App() {
                     const key = dstr(d);
                     const planned = h.days.includes(d.getDay());
                     const done = !!h.history[key];
+                    const isToday = key === today;
                     return (
                       <div key={key} style={{ flex: 1, textAlign: "center" }}>
-                        <div style={{ fontSize: 10.5, color: C.sub, fontWeight: 700, marginBottom: 4 }}>{DAYS[d.getDay()]}</div>
+                        <div style={{ fontSize: 10.5, color: isToday ? C.primary : C.sub, fontWeight: 800, marginBottom: 5 }}>{DAYS[d.getDay()]}</div>
                         <div onClick={() => up((s) => {
                           const hh = s.habits.find((x) => x.id === h.id);
                           if (hh.history[key]) delete hh.history[key]; else hh.history[key] = true;
                           return s;
                         })}
                           style={{
-                            height: 26, borderRadius: 8, cursor: "pointer",
-                            background: done ? C.primary : planned ? C.line : C.soft,
-                            opacity: planned || done ? 1 : 0.5,
-                          }} />
+                            height: 30, borderRadius: 9, cursor: "pointer",
+                            display: "flex", alignItems: "center", justifyContent: "center",
+                            background: done ? `linear-gradient(135deg, ${C.primary}, ${C.accent})` : planned ? C.soft : "transparent",
+                            border: isToday && !done ? `1.5px solid ${C.primary}` : planned ? `1px solid ${C.line}` : `1px dashed ${C.line}`,
+                            opacity: planned || done ? 1 : 0.55, transition: "background 0.2s ease",
+                          }}>
+                          {done && <CheckIcon size={13} strokeWidth={3} color="#fff" />}
+                        </div>
                       </div>
                     );
                   })}
@@ -2784,6 +2874,7 @@ export default function App() {
   const [newTip, setNewTip] = useState("");
   const [editEvt, setEditEvt] = useState(null);
   const [newEvt, setNewEvt] = useState({ who: "yo", title: "", day: 1, start: "18:00", end: "19:30" });
+  const [agendaDay, setAgendaDay] = useState(dow); // día seleccionado en el timeline de Agenda
 
   /* ============ AGENDA / CRONOGRAMA ============ */
   function Agenda() {
@@ -2859,57 +2950,151 @@ export default function App() {
           </button>
         </div>
 
-        {ORDER.map((d) => {
-          const list = byDay(d);
-          const isToday = d === dow;
+        {/* selector de días */}
+        <div style={{ display: "flex", gap: 6, margin: "0 4px 14px" }}>
+          {ORDER.map((d) => {
+            const cnt = byDay(d).length;
+            const active = d === agendaDay;
+            const isToday = d === dow;
+            return (
+              <button key={d} onClick={() => { setAgendaDay(d); setEditEvt(null); }} style={{
+                flex: 1, padding: "8px 0 7px", borderRadius: 12, cursor: "pointer", fontFamily: FONT,
+                border: `1px solid ${active ? "transparent" : C.line}`,
+                background: active ? `linear-gradient(135deg, ${C.primary}, ${C.accent})` : C.card,
+                color: active ? "#fff" : (isToday ? C.primary : C.sub),
+                boxShadow: active ? `0 4px 12px ${C.primaryGlow}` : "none",
+                display: "flex", flexDirection: "column", alignItems: "center", gap: 4, transition: "all 0.15s",
+              }}>
+                <span style={{ fontSize: 13, fontWeight: 800 }}>{DAYS[d]}</span>
+                <span style={{ width: 5, height: 5, borderRadius: 3, background: cnt ? (active ? "#fff" : C.primary) : "transparent" }} />
+              </button>
+            );
+          })}
+        </div>
+
+        {(() => {
+          const dayEvts = byDay(agendaDay).map((e) => ({
+            ...e, s: hm2min(e.start), e2: e.end ? hm2min(e.end) : hm2min(e.start) + 20, punt: !e.end,
+          }));
+          const selName = DAY_NAMES[agendaDay];
+          const isSelToday = agendaDay === dow;
+          const header = (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 4px 10px" }}>
+              <div style={{ fontWeight: 800, fontSize: 17, letterSpacing: -0.3 }}>{selName}</div>
+              {isSelToday && <span style={{ fontSize: 10.5, fontWeight: 800, color: "#fff", background: C.primary, borderRadius: 6, padding: "2px 7px" }}>HOY</span>}
+              <span style={{ fontSize: 12.5, color: C.sub, fontWeight: 700, marginLeft: "auto" }}>{dayEvts.length} {dayEvts.length === 1 ? "bloque" : "bloques"}</span>
+            </div>
+          );
+          if (dayEvts.length === 0) {
+            return (
+              <>
+                {header}
+                <Card style={{ textAlign: "center", padding: "28px 16px", color: C.sub }}>
+                  <Calendar size={26} style={{ opacity: 0.5 }} />
+                  <div style={{ fontWeight: 800, fontSize: 15, color: C.ink, marginTop: 8 }}>Día libre</div>
+                  <div style={{ fontSize: 13, marginTop: 2 }}>No hay nada agendado para {selName.toLowerCase()}.</div>
+                </Card>
+              </>
+            );
+          }
+          const minStart = Math.min(...dayEvts.map((x) => x.s));
+          const maxEnd = Math.max(...dayEvts.map((x) => x.e2));
+          const startH = Math.max(0, Math.floor(minStart / 60));
+          let endH = Math.min(24, Math.ceil(maxEnd / 60));
+          if (endH <= startH) endH = startH + 1;
+          const PXM = 1.0, gutter = 48;
+          const totalH = (endH - startH) * 60 * PXM;
+
+          // asignación de columnas para bloques que se solapan
+          const cols = {};
+          let cluster = [], clusterEnd = -1;
+          const flush = () => {
+            const ends = [];
+            cluster.forEach((ev) => {
+              let placed = ends.findIndex((end) => ev.s >= end);
+              if (placed < 0) { placed = ends.length; ends.push(0); }
+              ends[placed] = ev.e2;
+              cols[ev.id] = { col: placed };
+            });
+            cluster.forEach((ev) => { cols[ev.id].n = ends.length; });
+            cluster = []; clusterEnd = -1;
+          };
+          [...dayEvts].sort((a, b) => a.s - b.s || a.e2 - b.e2).forEach((ev) => {
+            if (cluster.length && ev.s >= clusterEnd) flush();
+            cluster.push(ev); clusterEnd = Math.max(clusterEnd, ev.e2);
+          });
+          if (cluster.length) flush();
+
+          const nowTop = isSelToday && nowMin >= startH * 60 && nowMin <= endH * 60
+            ? (nowMin - startH * 60) * PXM : null;
+
           return (
-            <div key={d} style={{ marginBottom: 14 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 4px 8px" }}>
-                <div style={{ fontWeight: 800, fontSize: 15, color: isToday ? C.primary : C.ink }}>{DAY_NAMES[d]}</div>
-                {isToday && <span style={{ fontSize: 10.5, fontWeight: 800, color: "#fff", background: C.primary, borderRadius: 6, padding: "2px 7px" }}>HOY</span>}
-              </div>
-              {list.length === 0 ? (
-                <div style={{ fontSize: 13, color: C.sub, padding: "0 6px 2px" }}>Libre</div>
-              ) : list.map((e) => {
-                const o = OWNER[e.who] || OWNER.yo;
-                const editing = editEvt === e.id;
-                const isNext = e.id === nextId;
-                return (
-                  <Card key={e.id} style={{
-                    marginBottom: 8, padding: 0, overflow: "hidden",
-                    border: isNext ? `1.5px solid ${C.primary}` : undefined,
-                    boxShadow: isNext ? `0 0 0 4px ${C.primaryGlow}, 0 8px 24px ${C.primaryGlow}` : undefined,
-                  }}>
-                    <div style={{ display: "flex", alignItems: "stretch" }}>
-                      <div style={{ width: 5, background: o.color, flexShrink: 0 }} />
-                      <div style={{ flex: 1, padding: "12px 14px", minWidth: 0 }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                          <div style={{ background: o.soft, color: o.ink, fontWeight: 800, fontSize: 12.5, borderRadius: 8, padding: "5px 9px", whiteSpace: "nowrap" }}>{fmt(e)}</div>
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                              <div style={{ fontWeight: 700, fontSize: 15, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.title || "—"}</div>
-                              {isNext && <span style={{ fontSize: 9, fontWeight: 900, color: "#fff", background: C.primary, borderRadius: 5, padding: "2px 6px", letterSpacing: 0.4, flexShrink: 0, animation: "nortePulse 2.2s ease-in-out infinite" }}>PRÓXIMO</span>}
-                            </div>
-                            <div style={{ fontSize: 11.5, color: o.color, fontWeight: 700 }}>{o.label}</div>
-                          </div>
-                          <Btn kind="soft" small onClick={() => setEditEvt(editing ? null : e.id)} style={{ display: "flex" }}>{editing ? "Listo" : <Pencil size={14} />}</Btn>
-                        </div>
-                        {editing && (
-                          <>
-                            {editFields(e, (nv) => up((s) => { Object.assign(s.schedule.find((x) => x.id === e.id), nv); return s; }))}
-                            <div style={{ marginTop: 8, textAlign: "right" }}>
-                              <Btn kind="danger" small onClick={() => { setEditEvt(null); up((s) => { s.schedule = s.schedule.filter((x) => x.id !== e.id); return s; }); }}>Borrar</Btn>
-                            </div>
-                          </>
-                        )}
+            <>
+              {header}
+              <Card style={{ padding: "12px 12px 8px", overflow: "hidden" }}>
+                <div style={{ position: "relative", height: totalH }}>
+                  {Array.from({ length: endH - startH + 1 }, (_, i) => {
+                    const h = startH + i, y = i * 60 * PXM;
+                    return (
+                      <div key={h} style={{ position: "absolute", top: y, left: 0, right: 0, height: 0 }}>
+                        <span style={{ position: "absolute", left: 0, top: -7, width: gutter - 10, textAlign: "right", fontSize: 11, fontWeight: 700, color: C.sub, fontVariantNumeric: "tabular-nums" }}>{String(h).padStart(2, "0")}:00</span>
+                        <div style={{ position: "absolute", left: gutter, right: 0, top: 0, borderTop: `1px solid ${C.line}` }} />
                       </div>
+                    );
+                  })}
+                  <div style={{ position: "absolute", left: gutter, right: 0, top: 0, bottom: 0 }}>
+                    {dayEvts.map((e) => {
+                      const o = OWNER[e.who] || OWNER.yo;
+                      const { col, n } = cols[e.id];
+                      const top = (e.s - startH * 60) * PXM;
+                      const bh = Math.max(e.punt ? 30 : 36, (e.e2 - e.s) * PXM - 4);
+                      const isNext = e.id === nextId && isSelToday;
+                      const w = 100 / n;
+                      return (
+                        <button key={e.id} onClick={() => setEditEvt(editEvt === e.id ? null : e.id)} style={{
+                          position: "absolute", top, height: bh,
+                          left: `calc(${col * w}% + 2px)`, width: `calc(${w}% - 4px)`,
+                          background: o.soft, borderRadius: 12, cursor: "pointer", padding: 0, overflow: "hidden",
+                          textAlign: "left", fontFamily: FONT, display: "flex",
+                          border: `1.5px ${e.punt ? "dashed" : "solid"} ${isNext ? C.primary : (e.punt ? o.color : "transparent")}`,
+                          boxShadow: isNext ? `0 0 0 3px ${C.primaryGlow}` : "none",
+                        }}>
+                          <span style={{ width: 4, background: o.color, flexShrink: 0 }} />
+                          <span style={{ flex: 1, minWidth: 0, padding: "5px 8px", display: "block" }}>
+                            <span style={{ display: "block", fontSize: 12.5, fontWeight: 800, color: o.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{e.title || "—"}</span>
+                            <span style={{ display: "block", fontSize: 10.5, fontWeight: 700, color: o.color, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{fmt(e)}{isNext ? " · PRÓXIMO" : ""}</span>
+                          </span>
+                        </button>
+                      );
+                    })}
+                    {nowTop != null && (
+                      <div style={{ position: "absolute", left: 0, right: 0, top: nowTop, zIndex: 5, pointerEvents: "none" }}>
+                        <div style={{ position: "absolute", left: -3, top: -4, width: 8, height: 8, borderRadius: 4, background: C.red }} />
+                        <div style={{ position: "absolute", left: 0, right: 0, top: 0, borderTop: `2px solid ${C.red}` }} />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </Card>
+
+              {editEvt && evts.find((x) => x.id === editEvt) && (() => {
+                const e = evts.find((x) => x.id === editEvt);
+                return (
+                  <Card style={{ marginTop: 12, border: `1.5px solid ${C.primary}` }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      <div style={{ fontWeight: 800, fontSize: 14 }}>Editar bloque</div>
+                      <button onClick={() => setEditEvt(null)} style={{ background: C.soft, border: "none", borderRadius: 999, width: 28, height: 28, cursor: "pointer", color: C.sub, display: "flex", alignItems: "center", justifyContent: "center" }}><X size={14} /></button>
+                    </div>
+                    {editFields(e, (nv) => up((s) => { Object.assign(s.schedule.find((x) => x.id === e.id), nv); return s; }))}
+                    <div style={{ marginTop: 8, textAlign: "right" }}>
+                      <Btn kind="danger" small onClick={() => { setEditEvt(null); up((s) => { s.schedule = s.schedule.filter((x) => x.id !== e.id); return s; }); }}>Borrar</Btn>
                     </div>
                   </Card>
                 );
-              })}
-            </div>
+              })()}
+            </>
           );
-        })}
+        })()}
 
         <SectionTitle>Nuevo bloque</SectionTitle>
         <Card>
