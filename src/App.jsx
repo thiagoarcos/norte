@@ -1066,6 +1066,7 @@ export default function App() {
   const [showCalc, setShowCalc] = useState(false);
   const [showChat, setShowChat] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [kbInset, setKbInset] = useState(0); // alto del teclado en iOS (visualViewport)
   const swipeRef = useRef({ x: 0, y: 0 });
   const [chatMsgs, setChatMsgs] = useState([]);
   const [chatInput, setChatInput] = useState("");
@@ -1260,6 +1261,19 @@ export default function App() {
   useEffect(() => {
     if (chatScrollRef.current) chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
   }, [chatMsgs, chatBusy, showChat]);
+
+  // iOS PWA: cuando se abre el teclado, la ventana fija NO se achica sola, así que el
+  // pie del chat (con el botón enviar) queda tapado. Con visualViewport calculamos el
+  // alto del teclado y levantamos el modal esa cantidad.
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const onResize = () => setKbInset(Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop)));
+    vv.addEventListener("resize", onResize);
+    vv.addEventListener("scroll", onResize);
+    onResize();
+    return () => { vv.removeEventListener("resize", onResize); vv.removeEventListener("scroll", onResize); };
+  }, []);
 
   // Comandos que NEXO manda a la app (crear/borrar bloques de Agenda, recordatorios)
   const applyCmd = (c) => {
@@ -3480,7 +3494,7 @@ export default function App() {
       )}
 
       {showChat && (
-        <div style={{ position: "fixed", inset: 0, zIndex: 60, background: C.bg, display: "flex", flexDirection: "column", fontFamily: FONT, animation: "norteSlideUp 0.3s cubic-bezier(0.22,1,0.36,1)" }}>
+        <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: kbInset, zIndex: 60, background: C.bg, display: "flex", flexDirection: "column", fontFamily: FONT, animation: "norteSlideUp 0.3s cubic-bezier(0.22,1,0.36,1)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "calc(12px + env(safe-area-inset-top)) 16px 12px", borderBottom: `1px solid ${C.line}`, background: C.card }}>
             <div style={{ width: 36, height: 36, borderRadius: 12, background: `linear-gradient(135deg, ${C.primary}, ${C.accent})`, display: "flex", alignItems: "center", justifyContent: "center" }}>
               <Bot size={20} color="#fff" />
@@ -3522,7 +3536,24 @@ export default function App() {
             <Input value={chatInput} placeholder="Escribí un mensaje…" style={{ flex: 1 }}
               onChange={(e) => setChatInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); } }} />
-            <Btn onClick={sendChat} style={{ display: "flex", alignItems: "center" }}><Send size={16} /></Btn>
+            <button
+              onClick={sendChat}
+              onMouseDown={(e) => e.preventDefault()}  // no le saca el foco al input: en iOS así el tap sí dispara
+              disabled={chatBusy}
+              aria-label="Enviar"
+              onPointerDown={(e) => { if (!chatBusy) e.currentTarget.style.transform = "scale(0.94)"; }}
+              onPointerUp={(e) => { e.currentTarget.style.transform = "scale(1)"; }}
+              onPointerLeave={(e) => { e.currentTarget.style.transform = "scale(1)"; }}
+              style={{
+                border: "none", borderRadius: 12, fontFamily: FONT, flexShrink: 0,
+                padding: "12px 16px", display: "flex", alignItems: "center", justifyContent: "center",
+                background: `linear-gradient(135deg, ${C.primary}, ${C.accent})`, color: "#fff",
+                boxShadow: `0 4px 14px ${C.primaryGlow}`,
+                cursor: chatBusy ? "default" : "pointer", opacity: chatBusy ? 0.5 : 1,
+                transition: "opacity 0.2s ease, transform 0.12s ease",
+              }}>
+              <Send size={16} />
+            </button>
           </div>
         </div>
       )}
