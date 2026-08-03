@@ -1516,7 +1516,7 @@ export default function App() {
   /* Sync completo hacia NEXO/Obsidian: agenda + estado de hoy (gym, agua, hábitos,
      peso, nutrición, cut). Debounced para no spamear el relay en cada toque. */
   useEffect(() => {
-    if (!pushReady) return;
+    if (!pushCfg.url || !pushCfg.token) return; // basta con el relay configurado (no requiere notis activas)
     clearTimeout(snapTimer.current);
     snapTimer.current = setTimeout(() => {
       const snapshot = {
