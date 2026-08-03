@@ -1,0 +1,14 @@
+{
+  // Deploy de la PWA NORTE como Worker de assets estáticos (Cloudflare Workers Builds).
+  // Cloudflare corre:  build command -> "npx vite build"  (genera ./dist)
+  //                    deploy command -> "npx wrangler deploy"  (sube ./dist)
+  // Queda publicada en  https://norte.arcossz.workers.dev
+  // OJO: no confundir con worker/wrangler.jsonc, que es el relay de notificaciones (nexofit-push).
+  "name": "norte",
+  "compatibility_date": "2025-06-01",
+  "assets": {
+    "directory": "./dist",
+    // La app es una sola página (sin rutas): servir index.html para cualquier ruta desconocida.
+    "not_found_handling": "single-page-application"
+  }
+}
