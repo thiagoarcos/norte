@@ -1087,6 +1087,7 @@ export default function App() {
   const chatScrollRef = useRef(null);
   const firedRef = useRef({});
   const saveTimer = useRef(null);
+  const snapTimer = useRef(null); // debounce del sync de estado hacia NEXO
 
   Object.assign(C, state.theme === "dark" ? DARK : LIGHT, { theme: state.theme });
 
@@ -1451,11 +1452,8 @@ export default function App() {
     if (items.length) pushCall("/schedule", items);
   }, [pushReady, state.reminders, state.schedule, state.agendaAlerts, cutActive]);
 
-  /* Sync de la Agenda hacia NEXO/Obsidian: subimos el snapshot cuando cambia. */
-  useEffect(() => {
-    if (!pushReady) return;
-    pushCall("/agenda/push", { schedule: state.schedule || [] });
-  }, [pushReady, state.schedule]);
+  /* El sync completo hacia NEXO (agenda + estado de hoy) está más abajo,
+     después de calcular las métricas del día. */
 
   /* ---------- métricas ---------- */
   const habitsToday = state.habits.filter((h) => h.days.includes(dow));
@@ -1514,6 +1512,32 @@ export default function App() {
     if (s.cut.manual[today][id]) delete s.cut.manual[today][id]; else s.cut.manual[today][id] = true;
     return s;
   });
+
+  /* Sync completo hacia NEXO/Obsidian: agenda + estado de hoy (gym, agua, hábitos,
+     peso, nutrición, cut). Debounced para no spamear el relay en cada toque. */
+  useEffect(() => {
+    if (!pushReady) return;
+    clearTimeout(snapTimer.current);
+    snapTimer.current = setTimeout(() => {
+      const snapshot = {
+        fecha: today,
+        gym: {
+          hoy: currentProgDay
+            ? { nombre: currentProgDay.name || "Entreno", ejercicios: currentProgDay.exercises.map((e) => e.name).filter(Boolean), hechos: exDone, total: exTotal }
+            : null,
+          entrenoHoy: (state.sessionLog[today] || []).length > 0,
+          split: (currentProgWeek?.days || []).map((d) => d.name).filter(Boolean),
+        },
+        agua: { hoy: water, meta: state.goals.water },
+        nutricion: { kcal, kcalMeta: state.goals.kcal, proteina: prot, proteinaMeta: state.goals.protein, carbs, grasa: fat, comidas: mealsToday.length },
+        habitos: habitsToday.map((h) => ({ nombre: h.name, hecho: !!h.history[today] })),
+        peso: bodyWeight || null,
+        cut: cut ? { activo: true, bf: cutBf, fase: cutPhase?.name, objetivo: cutPhase?.target, misiones: `${cutMissionsDone}/${cutMissions.length}` } : { activo: false },
+      };
+      pushCall("/agenda/push", { schedule: state.schedule || [], snapshot });
+    }, 1200);
+    return () => clearTimeout(snapTimer.current);
+  }, [pushReady, state]);
 
   // Subida de nivel: celebrar una sola vez cuando el % de grasa cruza el umbral de fase
   useEffect(() => {

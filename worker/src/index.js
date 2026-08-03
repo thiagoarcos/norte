@@ -111,7 +111,12 @@ export class Scheduler {
 
     /* ---------- Sync de Agenda (app -> NEXO/Obsidian) ---------- */
     if (url.pathname === "/agenda/push") {
-      await this.state.storage.put("agenda_snapshot", { schedule: body.schedule || [], at: Date.now() });
+      // schedule = cronograma; snapshot = estado de hoy (gym, agua, hábitos, peso, nutrición, cut)
+      await this.state.storage.put("agenda_snapshot", {
+        schedule: body.schedule || [],
+        snapshot: body.snapshot || null,
+        at: Date.now(),
+      });
       return json({ ok: true });
     }
     if (url.pathname === "/agenda/get") {
