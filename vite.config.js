@@ -2,9 +2,9 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 
-// IMPORTANTE: el base tiene que ser "/<nombre-del-repo>/" (GitHub Pages sirve ahí).
-// El repo es github.com/thiagoarcos/norte → base "/norte/". Si renombrás el repo, cambialo acá.
-const BASE = "/norte/";
+// Deploy en Cloudflare Pages: sirve desde la raíz del dominio (norte.pages.dev o
+// dominio propio), así que el base es "/". (Con GitHub Pages tenía que ser "/norte/".)
+const BASE = "/";
 
 export default defineConfig({
   base: BASE,
