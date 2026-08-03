@@ -5,6 +5,7 @@ import {
   Upload, Award, PersonStanding, Check as CheckIcon, Video, Pencil, AlertTriangle, ScanFace,
   Bot, Send, Pause, Play, Clock, Menu,
 } from "lucide-react";
+import { buildDefaultProgram } from "./defaultProgram";
 
 /* ============ NORTE (ex NEXO FIT) v4 ============
    Nuevo en v4: mapa muscular interactivo (frente/espalda) en Gym,
@@ -523,11 +524,8 @@ const initialState = {
   exerciseHistory: {},
   currentWeek: 0,
   currentDay: 0,
-  program: {
-    weeks: Array.from({ length: 5 }, () => ({
-      days: Array.from({ length: 7 }, () => ({ name: "", notes: "", exercises: [] })),
-    })),
-  },
+  programSeedV: 1, // subir cuando cambie la rutina "de fábrica" para forzar la actualización
+  program: buildDefaultProgram(),
   meals: {},
   mealLibrary: [],
   water: {},
@@ -1101,13 +1099,15 @@ export default function App() {
     (async () => {
       const s = await loadState();
       if (s) setState((prev) => {
-        // Si la semilla del cronograma quedó vieja, refrescamos schedule (el resto de los datos se conserva).
-        const seedStale = (s.scheduleSeedV || 0) < initialState.scheduleSeedV;
+        // Si una semilla quedó vieja, refrescamos ese dato (el resto se conserva).
+        const schedStale = (s.scheduleSeedV || 0) < initialState.scheduleSeedV;
+        const progStale = (s.programSeedV || 0) < initialState.programSeedV;
         return {
           ...prev, ...s,
           goals: { ...prev.goals, ...(s.goals || {}) },
-          program: s.program || prev.program,
-          schedule: seedStale ? initialState.schedule : (s.schedule || prev.schedule),
+          program: progStale ? initialState.program : (s.program || prev.program),
+          programSeedV: initialState.programSeedV,
+          schedule: schedStale ? initialState.schedule : (s.schedule || prev.schedule),
           scheduleSeedV: initialState.scheduleSeedV,
         };
       });
