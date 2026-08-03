@@ -361,6 +361,19 @@ async function hashPin(pin) {
   return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+/* Build privada de NORTE: config bakeada.
+   OJO: este repo es PÚBLICO — el token y el PIN quedan visibles. Rotar el token si hace falta. */
+const RELAY_URL = "https://nexofit-push.arcossz.workers.dev";
+const RELAY_TOKEN = "8r3UIJNxdzJaDk6DVoHGMevRpPPUXXEY";
+// PIN por defecto 4444 = SHA-256 de "nexofit-salt:4444". Se provisiona en el primer
+// arranque si no hay PIN y no lo desactivaste a propósito (podés cambiarlo en Más → Seguridad).
+const DEFAULT_PIN_HASH = "0dfd3b448fe1bc90a4d2b1a2e2bb8332d924380758640fbd83553cf82e9274e6";
+try {
+  if (typeof localStorage !== "undefined" && !localStorage.getItem(PIN_KEY) && localStorage.getItem(PIN_OPTOUT) !== "1") {
+    localStorage.setItem(PIN_KEY, DEFAULT_PIN_HASH);
+  }
+} catch (e) {}
+
 /* ---------- Face ID / huella vía WebAuthn (bloqueo local del dispositivo) ---------- */
 const bioSupported = () =>
   typeof window !== "undefined" && !!window.PublicKeyCredential &&
@@ -528,7 +541,7 @@ const initialState = {
   goals: { kcal: 2500, protein: 140, carbs: 300, fat: 80, water: 8 },
   customTips: [],
   cut: null,
-  push: { url: "", token: "", enabled: false },
+  push: { url: RELAY_URL, token: RELAY_TOKEN, enabled: false },
   agendaAlerts: { on: true, lead: 15 }, // avisar `lead` minutos antes de cada bloque
   scheduleSeedV: 2, // subir cuando cambie el cronograma "de fábrica" para forzar la actualización
   // Cronograma: who = "yo" | "novia"; day 0=Dom..6=Sáb; end vacío = aviso puntual
@@ -1209,7 +1222,11 @@ export default function App() {
 
   /* ---------- Notificaciones push (worker/ en Cloudflare) ---------- */
   const cutActive = !!state.cut;
-  const pushCfg = state.push || { url: "", token: "", enabled: false };
+  const pushCfg = {
+    url: (state.push && state.push.url) || RELAY_URL,
+    token: (state.push && state.push.token) || RELAY_TOKEN,
+    enabled: !!(state.push && state.push.enabled),
+  };
   const pushReady = !!(pushCfg.enabled && pushCfg.url && pushCfg.token);
   const pushCall = async (path, payload) => {
     if (!pushCfg.url || !pushCfg.token) return null;
