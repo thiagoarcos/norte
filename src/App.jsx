@@ -530,19 +530,25 @@ const initialState = {
   cut: null,
   push: { url: "", token: "", enabled: false },
   agendaAlerts: { on: true, lead: 15 }, // avisar `lead` minutos antes de cada bloque
+  scheduleSeedV: 2, // subir cuando cambie el cronograma "de fábrica" para forzar la actualización
   // Cronograma: who = "yo" | "novia"; day 0=Dom..6=Sáb; end vacío = aviso puntual
   schedule: [
     // Novia
-    { id: uid(), who: "novia", title: "Sale del colegio", day: 1, start: "13:50", end: "" },
+    { id: uid(), who: "novia", title: "Colegio", day: 1, start: "08:00", end: "13:50" },
     { id: uid(), who: "novia", title: "Vóley", day: 1, start: "20:30", end: "22:00" },
-    { id: uid(), who: "novia", title: "Sale del colegio", day: 2, start: "13:00", end: "" },
-    { id: uid(), who: "novia", title: "Sale del colegio", day: 3, start: "13:00", end: "" },
+    { id: uid(), who: "novia", title: "Colegio", day: 2, start: "08:00", end: "13:00" },
+    { id: uid(), who: "novia", title: "Colegio", day: 3, start: "08:00", end: "13:00" },
     { id: uid(), who: "novia", title: "Gimnasia", day: 3, start: "15:20", end: "16:20" },
-    { id: uid(), who: "novia", title: "Sale del colegio", day: 4, start: "13:00", end: "" },
-    { id: uid(), who: "novia", title: "Sale del colegio", day: 5, start: "13:00", end: "" },
+    { id: uid(), who: "novia", title: "Colegio", day: 4, start: "08:00", end: "13:00" },
+    { id: uid(), who: "novia", title: "Colegio", day: 5, start: "08:00", end: "13:00" },
     { id: uid(), who: "novia", title: "Gimnasia", day: 5, start: "17:20", end: "18:20" },
     { id: uid(), who: "novia", title: "Vóley", day: 5, start: "20:30", end: "22:00" },
     // Yo
+    { id: uid(), who: "yo", title: "Colegio", day: 1, start: "08:00", end: "17:10" },
+    { id: uid(), who: "yo", title: "Colegio", day: 2, start: "08:00", end: "14:20" },
+    { id: uid(), who: "yo", title: "Colegio", day: 3, start: "08:00", end: "17:10" },
+    { id: uid(), who: "yo", title: "Colegio", day: 4, start: "08:00", end: "13:40" },
+    { id: uid(), who: "yo", title: "Colegio", day: 5, start: "08:00", end: "13:00" },
     { id: uid(), who: "yo", title: "Gym (volvemos juntos del vóley)", day: 1, start: "20:30", end: "22:00" },
     { id: uid(), who: "yo", title: "Gym", day: 2, start: "18:00", end: "19:30" },
     { id: uid(), who: "yo", title: "Gym", day: 3, start: "18:00", end: "19:30" },
@@ -1077,7 +1083,17 @@ export default function App() {
   useEffect(() => {
     (async () => {
       const s = await loadState();
-      if (s) setState((prev) => ({ ...prev, ...s, goals: { ...prev.goals, ...(s.goals || {}) }, program: s.program || prev.program }));
+      if (s) setState((prev) => {
+        // Si la semilla del cronograma quedó vieja, refrescamos schedule (el resto de los datos se conserva).
+        const seedStale = (s.scheduleSeedV || 0) < initialState.scheduleSeedV;
+        return {
+          ...prev, ...s,
+          goals: { ...prev.goals, ...(s.goals || {}) },
+          program: s.program || prev.program,
+          schedule: seedStale ? initialState.schedule : (s.schedule || prev.schedule),
+          scheduleSeedV: initialState.scheduleSeedV,
+        };
+      });
       setLoaded(true);
     })();
   }, []);
@@ -1617,9 +1633,6 @@ export default function App() {
             <h1 style={{ margin: "4px 0 14px", fontSize: 31, fontWeight: 800, letterSpacing: -0.8, lineHeight: 1.05 }}>{greet}</h1>
           </div>
           <div style={{ display: "flex", gap: 8 }}>
-            <Btn kind="soft" small onClick={() => setShowChat(true)} style={{ display: "flex" }}>
-              <Bot size={16} />
-            </Btn>
             <Btn kind="soft" small onClick={() => up((s) => { s.theme = s.theme === "dark" ? "light" : "dark"; return s; })}>
               {state.theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
             </Btn>
@@ -1793,7 +1806,7 @@ export default function App() {
         <div style={{
           position: "fixed", bottom: "calc(84px + env(safe-area-inset-bottom))",
           left: 12, right: 12, zIndex: 35, maxWidth: 500, margin: "0 auto",
-          display: "flex", justifyContent: "center", pointerEvents: "none",
+          display: "flex", justifyContent: "flex-start", paddingRight: 74, pointerEvents: "none",
         }}>
           {timer > 0 || timerPaused ? (() => {
             const paused = !!timerPaused;
@@ -1810,9 +1823,9 @@ export default function App() {
             );
             return (
               <div style={{
-                pointerEvents: "auto", background: C.card, border: `1px solid ${C.line}`, borderRadius: 24,
-                padding: "10px 12px", display: "flex", alignItems: "center", gap: 12, width: "100%", maxWidth: 380,
-                boxShadow: `0 14px 36px rgba(0,0,0,0.22), 0 0 0 4px ${C.amberSoft}`,
+                pointerEvents: "auto", background: C.card, border: `1.5px solid ${C.amberSoft}`, borderRadius: 22,
+                padding: "10px 12px", display: "flex", alignItems: "center", gap: 12, width: "100%", maxWidth: 340,
+                boxShadow: `0 12px 32px rgba(0,0,0,0.18)`,
               }}>
                 <Ring pct={shown / timerTotal} size={58} stroke={6} color={C.amber}>
                   <div style={{ fontSize: 15, fontWeight: 900, letterSpacing: -0.6, fontVariantNumeric: "tabular-nums" }}>{fmtClock(shown)}</div>
@@ -1832,17 +1845,17 @@ export default function App() {
             );
           })() : (
             <div style={{
-              pointerEvents: "auto", display: "flex", alignItems: "center", gap: 8, background: C.card,
-              border: `1px solid ${C.line}`, borderRadius: 999, padding: "6px 6px 6px 14px",
-              boxShadow: "0 8px 24px rgba(0,0,0,0.10)",
+              pointerEvents: "auto", display: "flex", alignItems: "center", gap: 7, background: C.card,
+              border: `1px solid ${C.line}`, borderRadius: 999, padding: "6px 7px 6px 15px",
+              boxShadow: "0 10px 28px rgba(0,0,0,0.12)",
             }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 6, color: C.sub, fontWeight: 800, fontSize: 12.5, paddingRight: 2 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, color: C.sub, fontWeight: 800, fontSize: 12, letterSpacing: 0.2, paddingRight: 3, borderRight: `1px solid ${C.line}`, marginRight: 1 }}>
                 <Clock size={15} /> Descanso
               </div>
               {[60, 90, 120].map((t) => (
                 <button key={t} onClick={() => startTimer(t)} style={{
-                  border: "none", borderRadius: 999, padding: "9px 15px", cursor: "pointer",
-                  fontFamily: FONT, fontWeight: 800, fontSize: 13, transition: "transform 0.12s ease",
+                  border: "none", borderRadius: 999, padding: "9px 14px", cursor: "pointer",
+                  fontFamily: FONT, fontWeight: 800, fontSize: 13, fontVariantNumeric: "tabular-nums", transition: "transform 0.12s ease",
                   background: C.primarySoft, color: C.theme === "dark" ? C.primaryInk : C.primary,
                 }}
                   onPointerDown={(e) => { e.currentTarget.style.transform = "scale(0.92)"; }}
@@ -3437,7 +3450,7 @@ export default function App() {
     <div style={{ fontFamily: FONT, background: C.bg, minHeight: "100vh", color: C.ink }}>
       {banner && (
         <div style={{
-          position: "fixed", top: 12, left: 12, right: 12, zIndex: 50,
+          position: "fixed", top: "calc(12px + env(safe-area-inset-top))", left: 12, right: 12, zIndex: 50,
           background: C.ink, color: C.bg, borderRadius: 16, padding: "14px 16px",
           fontWeight: 700, fontSize: 14.5, boxShadow: "0 8px 24px rgba(0,0,0,0.3)",
           display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center",
@@ -3495,7 +3508,51 @@ export default function App() {
         </div>
       )}
 
-      <div style={{ maxWidth: 520, margin: "0 auto", padding: "16px 14px 120px" }}>
+      {/* Orbe flotante de NEXO: siempre a mano para abrir el chat */}
+      {!showChat && (
+        <button
+          onClick={() => setShowChat(true)}
+          aria-label="Hablar con NEXO"
+          style={{
+            position: "fixed", right: 18,
+            bottom: "calc(92px + env(safe-area-inset-bottom))",
+            zIndex: 45, width: 58, height: 58, padding: 0, border: "none",
+            borderRadius: "50%", background: "transparent", cursor: "pointer",
+            animation: "norteFloat 4.5s ease-in-out infinite",
+            WebkitTapHighlightColor: "transparent",
+          }}
+          onPointerDown={(e) => { e.currentTarget.style.transform = "scale(0.9)"; }}
+          onPointerUp={(e) => { e.currentTarget.style.transform = "scale(1)"; }}
+          onPointerLeave={(e) => { e.currentTarget.style.transform = "scale(1)"; }}
+        >
+          {/* halo verde que respira */}
+          <span style={{
+            position: "absolute", inset: -4, borderRadius: "50%",
+            background: "#22E39A", animation: "norteHalo 2.8s ease-in-out infinite",
+          }} />
+          {/* cuerpo del orbe: gradiente verde que gira */}
+          <span style={{
+            position: "absolute", inset: 0, borderRadius: "50%", overflow: "hidden",
+            boxShadow: `0 12px 30px rgba(16,185,129,0.45), inset 0 0 0 1px rgba(255,255,255,0.18)`,
+          }}>
+            <span style={{
+              position: "absolute", inset: "-25%", borderRadius: "50%",
+              background: `conic-gradient(from 0deg, #10B981, #34D399, #00E676, #059669, #10B981)`,
+              animation: "norteOrbSpin 7s linear infinite",
+            }} />
+          </span>
+          {/* brillo superior + ícono */}
+          <span style={{
+            position: "absolute", inset: 0, borderRadius: "50%",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            background: "radial-gradient(circle at 34% 26%, rgba(255,255,255,0.5), rgba(255,255,255,0) 55%)",
+          }}>
+            <Bot size={25} color="#fff" strokeWidth={2.2} />
+          </span>
+        </button>
+      )}
+
+      <div style={{ maxWidth: 520, margin: "0 auto", padding: "calc(14px + env(safe-area-inset-top)) 14px 120px" }}>
         <div key={tab} style={{ animation: "norteFadeUp 0.34s cubic-bezier(0.22,1,0.36,1) both" }}>
           {tab === "hoy" && Hoy()}
           {tab === "agenda" && Agenda()}
@@ -3513,29 +3570,39 @@ export default function App() {
         background: C.navBg, backdropFilter: "blur(24px) saturate(180%)",
         WebkitBackdropFilter: "blur(24px) saturate(180%)",
         border: `1px solid ${C.line}`,
-        borderRadius: 24, display: "flex", gap: 4,
-        padding: 7, boxShadow: "0 10px 40px rgba(0,0,0,0.14), 0 2px 8px rgba(0,0,0,0.06)",
+        borderRadius: 24, display: "flex", gap: 2,
+        padding: "6px 6px", boxShadow: "0 10px 40px rgba(0,0,0,0.14), 0 2px 8px rgba(0,0,0,0.06)",
       }}>
         {tabs.map((t) => {
           const active = tab === t.id;
+          const activeInk = C.theme === "dark" ? C.primaryInk : C.primary;
           return (
-            <button key={t.id} onClick={() => setTab(t.id)} aria-label={t.label} style={{
-              flex: active ? "2.4 1 0%" : "1 1 0%", minWidth: 0,
-              border: "none", cursor: "pointer", fontFamily: FONT,
-              display: "flex", flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7,
-              background: active ? `linear-gradient(135deg, ${C.primary}, ${C.accent})` : "transparent",
-              color: active ? "#fff" : C.sub,
-              borderRadius: 17, padding: "11px 6px", overflow: "hidden", whiteSpace: "nowrap",
-              boxShadow: active ? `0 6px 18px ${C.primaryGlow}` : "none",
-              transition: "flex-grow 0.4s cubic-bezier(0.22,1,0.36,1), background 0.3s ease, color 0.25s ease, box-shadow 0.3s ease",
+            <button key={t.id} onClick={() => setTab(t.id)} aria-label={t.label} aria-current={active ? "page" : undefined} style={{
+              flex: "1 1 0%", minWidth: 0,
+              border: "none", cursor: "pointer", fontFamily: FONT, background: "transparent",
+              display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3,
+              padding: "6px 2px", position: "relative", transition: "transform 0.12s ease",
             }}
-            onTouchStart={(e) => { if (!active) e.currentTarget.style.transform = "scale(0.92)"; }}
+            onTouchStart={(e) => { e.currentTarget.style.transform = "scale(0.9)"; }}
             onTouchEnd={(e) => { e.currentTarget.style.transform = "scale(1)"; }}
             >
-              <t.Icon size={20} strokeWidth={active ? 2.6 : 2} style={{ flexShrink: 0 }} />
-              {active && (
-                <span style={{ fontSize: 12.5, fontWeight: 800, letterSpacing: -0.1, animation: "norteFadeIn 0.35s ease both" }}>{t.label}</span>
-              )}
+              {/* punto indicador de la pestaña activa */}
+              <span style={{
+                width: 5, height: 5, borderRadius: "50%",
+                background: active ? C.primary : "transparent",
+                boxShadow: active ? `0 0 8px ${C.primaryGlow}` : "none",
+                transition: "background 0.25s ease, box-shadow 0.25s ease",
+              }} />
+              {/* ícono en pastilla suave cuando está activa */}
+              <span style={{
+                display: "flex", alignItems: "center", justifyContent: "center",
+                width: 44, height: 32, borderRadius: 12,
+                background: active ? C.primarySoft : "transparent",
+                color: active ? activeInk : C.sub,
+                transition: "background 0.3s ease, color 0.25s ease",
+              }}>
+                <t.Icon size={21} strokeWidth={active ? 2.6 : 2} style={{ flexShrink: 0 }} />
+              </span>
             </button>
           );
         })}

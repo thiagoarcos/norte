@@ -32,6 +32,10 @@
       @keyframes nortePop { 0% { transform: scale(0.85); } 60% { transform: scale(1.06); } 100% { transform: scale(1); } }
       @keyframes norteFadeIn { from { opacity: 0; } to { opacity: 1; } }
       @keyframes nortePulse { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
+      /* Orbe de NEXO: flota, gira su gradiente y respira un halo */
+      @keyframes norteFloat { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+      @keyframes norteOrbSpin { to { transform: rotate(360deg); } }
+      @keyframes norteHalo { 0%,100% { transform: scale(1); opacity: 0.55; } 50% { transform: scale(1.35); opacity: 0; } }
       @media (prefers-reduced-motion: reduce) {
         * { animation-duration: 0.001ms !important; }
       }
