@@ -3,7 +3,7 @@ import {
   Target, Dumbbell, Sun, Moon, Salad, Settings, Trophy, Flame, Zap, Droplet,
   TrendingUp, Apple, Sprout, Lock, Unlock, Bell, Lightbulb, Smartphone, X, Calendar,
   Upload, Award, PersonStanding, Check as CheckIcon, Video, Pencil, AlertTriangle, ScanFace,
-  Bot, Send, Pause, Play, Clock,
+  Bot, Send, Pause, Play, Clock, Menu,
 } from "lucide-react";
 
 /* ============ NORTE (ex NEXO FIT) v4 ============
@@ -1065,6 +1065,8 @@ export default function App() {
   const [confirmReset, setConfirmReset] = useState(false);
   const [showCalc, setShowCalc] = useState(false);
   const [showChat, setShowChat] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const swipeRef = useRef({ x: 0, y: 0 });
   const [chatMsgs, setChatMsgs] = useState([]);
   const [chatInput, setChatInput] = useState("");
   const [chatBusy, setChatBusy] = useState(false);
@@ -1802,69 +1804,6 @@ export default function App() {
           <BigStat value={`${weekHabitPct}%`} label="hábitos cumplidos (7d)" color={C.primary} />
           <BigStat value={`${achDone}/${ACHIEVEMENTS.length}`} label="logros" color={C.blue} />
         </Card>
-
-        <div style={{
-          position: "fixed", bottom: "calc(84px + env(safe-area-inset-bottom))",
-          left: 12, right: 12, zIndex: 35, maxWidth: 500, margin: "0 auto",
-          display: "flex", justifyContent: "flex-start", paddingRight: 74, pointerEvents: "none",
-        }}>
-          {timer > 0 || timerPaused ? (() => {
-            const paused = !!timerPaused;
-            const shown = paused ? timerPaused : timer;
-            const roundBtn = (onClick, node, extra = {}) => (
-              <button onClick={onClick} style={{
-                background: C.soft, border: "none", borderRadius: 14, width: 38, height: 38,
-                cursor: "pointer", color: C.sub, display: "flex", alignItems: "center", justifyContent: "center",
-                flexShrink: 0, transition: "transform 0.12s ease", ...extra,
-              }}
-                onPointerDown={(e) => { e.currentTarget.style.transform = "scale(0.9)"; }}
-                onPointerUp={(e) => { e.currentTarget.style.transform = "scale(1)"; }}
-                onPointerLeave={(e) => { e.currentTarget.style.transform = "scale(1)"; }}>{node}</button>
-            );
-            return (
-              <div style={{
-                pointerEvents: "auto", background: C.card, border: `1.5px solid ${C.amberSoft}`, borderRadius: 22,
-                padding: "10px 12px", display: "flex", alignItems: "center", gap: 12, width: "100%", maxWidth: 340,
-                boxShadow: `0 12px 32px rgba(0,0,0,0.18)`,
-              }}>
-                <Ring pct={shown / timerTotal} size={58} stroke={6} color={C.amber}>
-                  <div style={{ fontSize: 15, fontWeight: 900, letterSpacing: -0.6, fontVariantNumeric: "tabular-nums" }}>{fmtClock(shown)}</div>
-                </Ring>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: -0.2 }}>Descanso</div>
-                  <div style={{ fontSize: 11.5, color: paused ? C.amberInk : C.sub, fontWeight: 700 }}>
-                    {paused ? "En pausa" : "Recuperá para la próxima serie"}
-                  </div>
-                </div>
-                {roundBtn(() => addTimer(30), <span style={{ fontSize: 11.5, fontWeight: 900 }}>+30</span>)}
-                {roundBtn(paused ? resumeTimer : pauseTimer,
-                  paused ? <Play size={16} fill="currentColor" /> : <Pause size={16} fill="currentColor" />,
-                  { background: C.amberSoft, color: C.amberInk })}
-                {roundBtn(stopTimer, <X size={16} />)}
-              </div>
-            );
-          })() : (
-            <div style={{
-              pointerEvents: "auto", display: "flex", alignItems: "center", gap: 7, background: C.card,
-              border: `1px solid ${C.line}`, borderRadius: 999, padding: "6px 7px 6px 15px",
-              boxShadow: "0 10px 28px rgba(0,0,0,0.12)",
-            }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 6, color: C.sub, fontWeight: 800, fontSize: 12, letterSpacing: 0.2, paddingRight: 3, borderRight: `1px solid ${C.line}`, marginRight: 1 }}>
-                <Clock size={15} /> Descanso
-              </div>
-              {[60, 90, 120].map((t) => (
-                <button key={t} onClick={() => startTimer(t)} style={{
-                  border: "none", borderRadius: 999, padding: "9px 14px", cursor: "pointer",
-                  fontFamily: FONT, fontWeight: 800, fontSize: 13, fontVariantNumeric: "tabular-nums", transition: "transform 0.12s ease",
-                  background: C.primarySoft, color: C.theme === "dark" ? C.primaryInk : C.primary,
-                }}
-                  onPointerDown={(e) => { e.currentTarget.style.transform = "scale(0.92)"; }}
-                  onPointerUp={(e) => { e.currentTarget.style.transform = "scale(1)"; }}
-                  onPointerLeave={(e) => { e.currentTarget.style.transform = "scale(1)"; }}>{fmtClock(t)}</button>
-              ))}
-            </div>
-          )}
-        </div>
       </>
     );
   }
@@ -2432,6 +2371,68 @@ export default function App() {
     return (
       <>
         <PageHeader title="Gimnasio" subtitle="Entrenamiento" />
+
+        {/* Cronómetro de descanso (vive en el apartado de Gimnasio) */}
+        <div style={{ marginBottom: 14 }}>
+          {timer > 0 || timerPaused ? (() => {
+            const paused = !!timerPaused;
+            const shown = paused ? timerPaused : timer;
+            const roundBtn = (onClick, node, extra = {}) => (
+              <button onClick={onClick} style={{
+                background: C.soft, border: "none", borderRadius: 14, width: 40, height: 40,
+                cursor: "pointer", color: C.sub, display: "flex", alignItems: "center", justifyContent: "center",
+                flexShrink: 0, transition: "transform 0.12s ease", ...extra,
+              }}
+                onPointerDown={(e) => { e.currentTarget.style.transform = "scale(0.9)"; }}
+                onPointerUp={(e) => { e.currentTarget.style.transform = "scale(1)"; }}
+                onPointerLeave={(e) => { e.currentTarget.style.transform = "scale(1)"; }}>{node}</button>
+            );
+            return (
+              <div style={{
+                background: C.card, border: `1.5px solid ${C.amberSoft}`, borderRadius: 20,
+                padding: "12px 14px", display: "flex", alignItems: "center", gap: 12,
+                boxShadow: `0 8px 24px rgba(0,0,0,0.10)`,
+              }}>
+                <Ring pct={shown / timerTotal} size={60} stroke={6} color={C.amber}>
+                  <div style={{ fontSize: 16, fontWeight: 900, letterSpacing: -0.6, fontVariantNumeric: "tabular-nums" }}>{fmtClock(shown)}</div>
+                </Ring>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 15.5, fontWeight: 800, letterSpacing: -0.2 }}>Descanso</div>
+                  <div style={{ fontSize: 12, color: paused ? C.amberInk : C.sub, fontWeight: 700 }}>
+                    {paused ? "En pausa" : "Recuperá para la próxima serie"}
+                  </div>
+                </div>
+                {roundBtn(() => addTimer(30), <span style={{ fontSize: 12, fontWeight: 900 }}>+30</span>)}
+                {roundBtn(paused ? resumeTimer : pauseTimer,
+                  paused ? <Play size={17} fill="currentColor" /> : <Pause size={17} fill="currentColor" />,
+                  { background: C.amberSoft, color: C.amberInk })}
+                {roundBtn(stopTimer, <X size={17} />)}
+              </div>
+            );
+          })() : (
+            <div style={{
+              display: "flex", alignItems: "center", gap: 8, background: C.card,
+              border: `1px solid ${C.line}`, borderRadius: 16, padding: "10px 12px",
+              boxShadow: "0 4px 14px rgba(0,0,0,0.05)",
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, color: C.sub, fontWeight: 800, fontSize: 12.5, flexShrink: 0 }}>
+                <Clock size={16} /> Descanso
+              </div>
+              <div style={{ display: "flex", gap: 7, flex: 1, justifyContent: "flex-end" }}>
+                {[60, 90, 120].map((t) => (
+                  <button key={t} onClick={() => startTimer(t)} style={{
+                    border: "none", borderRadius: 12, padding: "10px 16px", cursor: "pointer",
+                    fontFamily: FONT, fontWeight: 800, fontSize: 13.5, fontVariantNumeric: "tabular-nums", transition: "transform 0.12s ease",
+                    background: C.primarySoft, color: C.theme === "dark" ? C.primaryInk : C.primary,
+                  }}
+                    onPointerDown={(e) => { e.currentTarget.style.transform = "scale(0.92)"; }}
+                    onPointerUp={(e) => { e.currentTarget.style.transform = "scale(1)"; }}
+                    onPointerLeave={(e) => { e.currentTarget.style.transform = "scale(1)"; }}>{fmtClock(t)}</button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
 
         <div style={{ marginBottom: 14 }}>
           <Segmented
@@ -3429,6 +3430,24 @@ export default function App() {
     { id: "dieta", label: "Dieta", Icon: Salad },
     { id: "mas", label: "Más", Icon: Settings },
   ];
+  const curTab = tabs.find((t) => t.id === tab) || tabs[0];
+
+  // Navegación tipo Instagram: deslizar horizontal cambia de sección
+  const onSwipeStart = (e) => {
+    const t = e.touches[0];
+    swipeRef.current = { x: t.clientX, y: t.clientY };
+  };
+  const onSwipeEnd = (e) => {
+    if (menuOpen || showChat) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - swipeRef.current.x;
+    const dy = t.clientY - swipeRef.current.y;
+    // Solo si el gesto es claramente horizontal (no interferir con scroll vertical)
+    if (Math.abs(dx) < 65 || Math.abs(dx) < Math.abs(dy) * 1.6) return;
+    const idx = tabs.findIndex((tb) => tb.id === tab);
+    if (dx < 0 && idx < tabs.length - 1) setTab(tabs[idx + 1].id);
+    else if (dx > 0 && idx > 0) setTab(tabs[idx - 1].id);
+  };
 
   if (!loaded) {
     return (
@@ -3514,9 +3533,9 @@ export default function App() {
           onClick={() => setShowChat(true)}
           aria-label="Hablar con NEXO"
           style={{
-            position: "fixed", right: 18,
-            bottom: "calc(92px + env(safe-area-inset-bottom))",
-            zIndex: 45, width: 58, height: 58, padding: 0, border: "none",
+            position: "fixed", right: 16,
+            bottom: "calc(14px + env(safe-area-inset-bottom))",
+            zIndex: 45, width: 56, height: 56, padding: 0, border: "none",
             borderRadius: "50%", background: "transparent", cursor: "pointer",
             animation: "norteFloat 4.5s ease-in-out infinite",
             WebkitTapHighlightColor: "transparent",
@@ -3552,7 +3571,8 @@ export default function App() {
         </button>
       )}
 
-      <div style={{ maxWidth: 520, margin: "0 auto", padding: "calc(14px + env(safe-area-inset-top)) 14px 120px" }}>
+      <div onTouchStart={onSwipeStart} onTouchEnd={onSwipeEnd}
+        style={{ maxWidth: 520, margin: "0 auto", padding: "calc(14px + env(safe-area-inset-top)) 14px 116px" }}>
         <div key={tab} style={{ animation: "norteFadeUp 0.34s cubic-bezier(0.22,1,0.36,1) both" }}>
           {tab === "hoy" && Hoy()}
           {tab === "agenda" && Agenda()}
@@ -3563,50 +3583,68 @@ export default function App() {
         </div>
       </div>
 
-      <nav style={{
-        position: "fixed", bottom: "calc(14px + env(safe-area-inset-bottom))",
-        left: 12, right: 12, zIndex: 40,
-        maxWidth: 500, margin: "0 auto",
-        background: C.navBg, backdropFilter: "blur(24px) saturate(180%)",
-        WebkitBackdropFilter: "blur(24px) saturate(180%)",
-        border: `1px solid ${C.line}`,
-        borderRadius: 24, display: "flex", gap: 2,
-        padding: "6px 6px", boxShadow: "0 10px 40px rgba(0,0,0,0.14), 0 2px 8px rgba(0,0,0,0.06)",
+      {/* Navbar = botón de 3 barritas: al tocar aparecen todas las funciones */}
+      <div style={{
+        position: "fixed", bottom: "calc(16px + env(safe-area-inset-bottom))",
+        left: 0, right: 0, zIndex: 40, display: "flex", justifyContent: "center", pointerEvents: "none",
       }}>
-        {tabs.map((t) => {
-          const active = tab === t.id;
-          const activeInk = C.theme === "dark" ? C.primaryInk : C.primary;
-          return (
-            <button key={t.id} onClick={() => setTab(t.id)} aria-label={t.label} aria-current={active ? "page" : undefined} style={{
-              flex: "1 1 0%", minWidth: 0,
-              border: "none", cursor: "pointer", fontFamily: FONT, background: "transparent",
-              display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3,
-              padding: "6px 2px", position: "relative", transition: "transform 0.12s ease",
-            }}
-            onTouchStart={(e) => { e.currentTarget.style.transform = "scale(0.9)"; }}
-            onTouchEnd={(e) => { e.currentTarget.style.transform = "scale(1)"; }}
-            >
-              {/* punto indicador de la pestaña activa */}
-              <span style={{
-                width: 5, height: 5, borderRadius: "50%",
-                background: active ? C.primary : "transparent",
-                boxShadow: active ? `0 0 8px ${C.primaryGlow}` : "none",
-                transition: "background 0.25s ease, box-shadow 0.25s ease",
-              }} />
-              {/* ícono en pastilla suave cuando está activa */}
-              <span style={{
-                display: "flex", alignItems: "center", justifyContent: "center",
-                width: 44, height: 32, borderRadius: 12,
-                background: active ? C.primarySoft : "transparent",
-                color: active ? activeInk : C.sub,
-                transition: "background 0.3s ease, color 0.25s ease",
-              }}>
-                <t.Icon size={21} strokeWidth={active ? 2.6 : 2} style={{ flexShrink: 0 }} />
-              </span>
-            </button>
-          );
-        })}
-      </nav>
+        <button onClick={() => setMenuOpen(true)} aria-label="Abrir menú" style={{
+          pointerEvents: "auto", display: "flex", alignItems: "center", gap: 10,
+          background: C.navBg, backdropFilter: "blur(24px) saturate(180%)", WebkitBackdropFilter: "blur(24px) saturate(180%)",
+          border: `1px solid ${C.line}`, borderRadius: 999, padding: "11px 20px 11px 17px",
+          boxShadow: "0 10px 40px rgba(0,0,0,0.16), 0 2px 8px rgba(0,0,0,0.06)",
+          cursor: "pointer", fontFamily: FONT, transition: "transform 0.12s ease",
+        }}
+          onPointerDown={(e) => { e.currentTarget.style.transform = "scale(0.94)"; }}
+          onPointerUp={(e) => { e.currentTarget.style.transform = "scale(1)"; }}
+          onPointerLeave={(e) => { e.currentTarget.style.transform = "scale(1)"; }}>
+          <Menu size={20} color={C.ink} strokeWidth={2.4} />
+          <span style={{ display: "flex", alignItems: "center", gap: 7, fontWeight: 800, fontSize: 14.5, color: C.ink, letterSpacing: -0.2 }}>
+            <curTab.Icon size={16} strokeWidth={2.4} style={{ color: C.theme === "dark" ? C.primaryInk : C.primary }} />
+            {curTab.label}
+          </span>
+        </button>
+      </div>
+
+      {/* Hoja con todas las funciones */}
+      {menuOpen && (
+        <>
+          <div onClick={() => setMenuOpen(false)} style={{
+            position: "fixed", inset: 0, zIndex: 55, background: "rgba(0,0,0,0.42)",
+            backdropFilter: "blur(2px)", WebkitBackdropFilter: "blur(2px)", animation: "norteFadeIn 0.2s ease",
+          }} />
+          <div style={{
+            position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 56, maxWidth: 520, margin: "0 auto",
+            background: C.card, borderTopLeftRadius: 26, borderTopRightRadius: 26, fontFamily: FONT,
+            padding: "10px 16px calc(22px + env(safe-area-inset-bottom))",
+            boxShadow: "0 -12px 44px rgba(0,0,0,0.24)", animation: "norteSlideUp 0.32s cubic-bezier(0.22,1,0.36,1)",
+          }}>
+            <div style={{ width: 40, height: 5, borderRadius: 999, background: C.line, margin: "4px auto 16px" }} />
+            <div style={{ fontSize: 11.5, fontWeight: 800, color: C.sub, letterSpacing: 1, textTransform: "uppercase", margin: "0 4px 12px" }}>Ir a</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              {tabs.map((t) => {
+                const active = tab === t.id;
+                return (
+                  <button key={t.id} onClick={() => { setTab(t.id); setMenuOpen(false); }} aria-current={active ? "page" : undefined} style={{
+                    display: "flex", alignItems: "center", gap: 12, padding: "15px 16px", borderRadius: 16, cursor: "pointer",
+                    fontFamily: FONT, textAlign: "left", transition: "transform 0.12s ease",
+                    border: `1.5px solid ${active ? "transparent" : C.line}`,
+                    background: active ? `linear-gradient(135deg, ${C.primary}, ${C.accent})` : C.bg,
+                    color: active ? "#fff" : C.ink,
+                    boxShadow: active ? `0 6px 18px ${C.primaryGlow}` : "none",
+                  }}
+                    onPointerDown={(e) => { e.currentTarget.style.transform = "scale(0.96)"; }}
+                    onPointerUp={(e) => { e.currentTarget.style.transform = "scale(1)"; }}
+                    onPointerLeave={(e) => { e.currentTarget.style.transform = "scale(1)"; }}>
+                    <t.Icon size={22} strokeWidth={2.4} style={{ flexShrink: 0 }} />
+                    <span style={{ fontWeight: 800, fontSize: 15 }}>{t.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
