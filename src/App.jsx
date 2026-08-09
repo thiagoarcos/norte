@@ -1082,6 +1082,8 @@ export default function App() {
   const [chatMsgs, setChatMsgs] = useState([]);
   const [chatInput, setChatInput] = useState("");
   const [chatBusy, setChatBusy] = useState(false);
+  const [listening, setListening] = useState(false); // dictado por voz activo
+  const recogRef = useRef(null);
   const chatScrollRef = useRef(null);
   const firedRef = useRef({});
   const saveTimer = useRef(null);
@@ -1241,8 +1243,8 @@ export default function App() {
   };
 
   // Chat con NEXO (asistente) vía el relay del worker. Requiere el bridge corriendo en la PC.
-  const sendChat = async () => {
-    const text = chatInput.trim();
+  const sendChat = async (override) => {
+    const text = (typeof override === "string" ? override : chatInput).trim();
     if (!text || chatBusy) return;
     if (!pushCfg.url || !pushCfg.token) {
       flash("Configurá el servidor en Más → Notificaciones para hablar con NEXO");
@@ -1276,6 +1278,31 @@ export default function App() {
     setChatBusy(false);
   };
 
+  // Dictado por voz. Donde hay Web Speech (Android/desktop) transcribe en vivo y manda
+  // al terminar; en iPhone (sin soporte) enfoca el input para usar el 🎤 del teclado.
+  const toggleMic = () => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) {
+      flash("Tocá el 🎤 del teclado para dictarle a NEXO");
+      try { document.getElementById("norteChatInput")?.focus(); } catch (e) {}
+      return;
+    }
+    if (listening) { try { recogRef.current?.stop(); } catch (e) {} return; }
+    const r = new SR();
+    r.lang = "es-AR"; r.interimResults = true; r.continuous = false;
+    r.onresult = (e) => {
+      let txt = "", final = false;
+      for (let i = 0; i < e.results.length; i++) { txt += e.results[i][0].transcript; if (e.results[i].isFinal) final = true; }
+      setChatInput(txt);
+      if (final && txt.trim()) setTimeout(() => sendChat(txt), 120);
+    };
+    r.onend = () => { setListening(false); recogRef.current = null; };
+    r.onerror = () => { setListening(false); };
+    recogRef.current = r;
+    setListening(true);
+    try { r.start(); } catch (e) { setListening(false); }
+  };
+
   useEffect(() => {
     if (chatScrollRef.current) chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
   }, [chatMsgs, chatBusy, showChat]);
@@ -1305,11 +1332,49 @@ export default function App() {
     } else if (c.type === "reminder_add") {
       up((s) => { s.reminders = [...(s.reminders || []), { id: uid(), text: c.text || "Recordatorio", time: c.time || "18:00", days: Array.isArray(c.days) && c.days.length ? c.days : [0, 1, 2, 3, 4, 5, 6] }]; return s; });
       flash(`🤖 NEXO agregó un recordatorio: ${c.text || ""}`);
+    } else if (c.type === "water_add") {
+      const n = Math.max(1, Math.min(20, Number(c.n) || 1));
+      up((s) => { s.water[today] = (s.water[today] || 0) + n; return s; });
+      flash(`🤖 NEXO sumó ${n} vaso${n > 1 ? "s" : ""} de agua 💧`);
+    } else if (c.type === "weight_set") {
+      const kg = Number(String(c.kg).replace(",", "."));
+      if (kg > 0) { up((s) => { s.weightLog[today] = kg; return s; }); flash(`🤖 NEXO registró tu peso: ${kg} kg`); }
+    } else if (c.type === "habit_done") {
+      const q = String(c.query || "").toLowerCase().trim();
+      up((s) => {
+        const h = (s.habits || []).find((x) => q && x.name.toLowerCase().includes(q));
+        if (h) h.history[today] = true;
+        return s;
+      });
+      flash(`🤖 NEXO marcó tu hábito${q ? ": " + c.query : ""} ✅`);
+    } else if (c.type === "train_done") {
+      up((s) => {
+        const wk = s.program?.weeks?.[s.currentWeek];
+        const day = wk && wk.days[s.currentDay];
+        s.workoutLog[today] = s.workoutLog[today] || {};
+        s.sessionLog[today] = s.sessionLog[today] || [];
+        if (day) day.exercises.forEach((ex) => {
+          if (!s.workoutLog[today][ex.id]) {
+            s.workoutLog[today][ex.id] = true;
+            s.sessionLog[today].push({ id: ex.id, name: ex.name, setsCount: (ex.sets || []).length, tonnage: 0 });
+          }
+        });
+        if (!s.sessionLog[today].length) s.sessionLog[today].push({ id: uid(), name: "Entreno", setsCount: 0, tonnage: 0 });
+        return s;
+      });
+      flash("🤖 NEXO marcó tu entreno de hoy 💪");
+    } else if (c.type === "meal_add") {
+      up((s) => {
+        s.meals[today] = s.meals[today] || [];
+        s.meals[today].push({ id: uid(), name: c.name || "Comida", kcal: Number(c.kcal) || 0, protein: Number(c.protein) || 0, carbs: Number(c.carbs) || 0, fat: Number(c.fat) || 0 });
+        return s;
+      });
+      flash(`🤖 NEXO registró una comida${c.name ? ": " + c.name : ""} 🍽️`);
     }
   };
 
   useEffect(() => {
-    if (!pushReady) return;
+    if (!pushCfg.url || !pushCfg.token) return; // alcanza con el relay configurado (no requiere notis)
     let alive = true;
     (async () => {
       while (alive) {
@@ -1321,7 +1386,7 @@ export default function App() {
       }
     })();
     return () => { alive = false; };
-  }, [pushReady]);
+  }, [pushCfg.url, pushCfg.token]);
 
   const schedulePush = (at) => {
     if (pushReady)
