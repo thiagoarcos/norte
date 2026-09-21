@@ -1,99 +1,43 @@
-# NORTE — deploy en GitHub Pages
+# NORTE
 
-App de hábitos, gimnasio y dieta lista para publicar en GitHub Pages e instalar como PWA en tu iPhone.
+App de hábitos, gimnasio, dieta y agenda, con integración por voz con NEXO (asistente personal). PWA lista para instalar en iPhone.
 
 ## 🔒 Protección con PIN
 
 La app arranca con una pantalla de bloqueo de 4 dígitos:
 
-- **Primera vez que la abrís**: te pide crear un PIN de 4 dígitos (y repetirlo para confirmar).
-- **Cada sesión nueva**: te pide el PIN para entrar. Una vez desbloqueada, queda así hasta que cierres la pestaña o mates la PWA.
-- **Cambiar/quitar el PIN**: en la pestaña Más → sección Seguridad.
+- **Primera vez que la abrís**: viene con un PIN por defecto (4444) ya cargado. Cambialo en Más → Seguridad.
+- **Cada sesión nueva**: te pide el PIN para entrar (o Face ID/huella si lo activaste). Una vez desbloqueada, queda así hasta que cierres la pestaña o mates la PWA.
 - **Si olvidás el PIN**: después de 3 intentos fallidos aparece un botón para restablecer la app (borra todos los datos y arranca de cero).
 
-El PIN se guarda **hasheado con SHA-256** en el `localStorage` de tu iPhone (no en texto plano). Aunque alguien tenga tu link de GitHub Pages, no puede entrar sin el PIN.
+El PIN se guarda **hasheado con SHA-256** en el `localStorage` de tu iPhone (no en texto plano).
 
 ## Nota sobre privacidad
 
-- El **repositorio** puede ser privado (nadie ve el código). ✅
-- La **página publicada** en GitHub Pages es **pública** en el plan gratis: cualquiera con el link la puede abrir. Sin embargo, tus datos personales NO viajan al link — se guardan en el `localStorage` de tu iPhone. Otra persona que entrara vería la app vacía como recién instalada.
-- Si querés privacidad real del link, hay que agregar una pantalla de PIN al inicio de la app (avisame y lo sumamos).
+- El repo (`github.com/thiagoarcos/norte`) es **público**: cualquiera puede ver el código, incluida la URL y el token del relay de push bakeados en `src/App.jsx`. Rotalos (ver más abajo) si alguna vez se filtran o parecen comprometidos.
+- La app publicada también es de acceso público por link: cualquiera con la URL puede abrirla. Tus datos personales NO viajan ahí — se guardan en el `localStorage` de tu iPhone. Otra persona que entrara vería la app vacía, como recién instalada, y no podría pasar del PIN sin conocerlo.
 
 ## Requisitos
 
 - **Node.js 18+**: https://nodejs.org (elegí LTS).
-- **Git**: https://git-scm.com.
-- **Cuenta de GitHub**: https://github.com (gratis).
+- **Git** y una **cuenta de GitHub** (el repo ya existe: `thiagoarcos/norte`).
+- **Cuenta de Cloudflare** (gratis) con `wrangler` autenticado (`npx wrangler login`, una sola vez).
 
-Verificá en la terminal:
-```bash
-node -v
-npm -v
-git --version
-```
-
-## Paso 1: crear el repositorio en GitHub
-
-1. Entrá a https://github.com y hacé login.
-2. Arriba a la derecha: **+** → **New repository**.
-3. Nombre del repo: `nexofit` (importante que coincida con el `base` del `vite.config.js`).
-4. Marcá **Private**.
-5. **NO** tildes "Add a README", "Add .gitignore" ni "Choose a license".
-6. Clic en **Create repository**.
-
-## Paso 2: probar la app localmente primero
-
-Parado dentro de la carpeta `nexofit-pwa-gh`:
+## Desarrollo local
 
 ```bash
 npm install
 npm run dev
 ```
 
-Abrí el link que sale (`http://localhost:5173/nexofit/`) y verificá que anda. Ctrl+C para cerrar.
+Abrí `http://localhost:5173/` y verificá que anda. Ctrl+C para cerrar.
 
-## Paso 3: subir el código a GitHub
+## Deploy de NORTE (la app)
 
-Seguí ejecutando en la misma carpeta:
+Se deploya como **Cloudflare Worker de assets estáticos** (no GitHub Pages) — ver `wrangler.jsonc` en la raíz. Cloudflare Workers Builds está conectado al repo de GitHub: cada `git push` a `main` dispara automáticamente:
 
-```bash
-git init
-git add .
-git commit -m "primera version de nexofit"
-git branch -M main
-git remote add origin https://github.com/TUUSUARIO/nexofit.git
-git push -u origin main
-```
-
-Reemplazá `TUUSUARIO` por tu usuario real de GitHub. La primera vez te va a abrir una ventana para loguearte.
-
-## Paso 4: activar GitHub Pages
-
-1. Andá al repo en GitHub (`https://github.com/TUUSUARIO/nexofit`).
-2. Tab **Settings** (arriba a la derecha).
-3. Menú lateral izquierdo: **Pages**.
-4. En **Source**, elegí **GitHub Actions**.
-5. Listo, no hay que apretar nada más.
-
-## Paso 5: esperar el primer deploy
-
-1. Volvé a la tab **Actions** del repo (arriba, al lado de "Settings").
-2. Vas a ver un workflow corriendo llamado "Deploy PWA to GitHub Pages".
-3. Tarda 1–2 minutos. Cuando se pone en verde, tu app ya está publicada.
-4. El link va a ser: **`https://TUUSUARIO.github.io/nexofit/`**
-
-## Paso 6: instalar en tu iPhone
-
-1. Abrí el link en **Safari** (obligatorio, no Chrome).
-2. Botón **Compartir** (cuadradito con flecha para arriba).
-3. Bajá y tocá **Agregar a inicio**.
-4. Nombre "NORTE" → **Agregar**.
-
-Aparece el ícono verde en tu home. Se abre en pantalla completa, sin barra de Safari.
-
-## Cómo actualizar la app
-
-Cada vez que cambies algo del código:
+1. `npx vite build` → genera `./dist`
+2. `npx wrangler deploy` → sube `./dist`
 
 ```bash
 git add .
@@ -101,24 +45,54 @@ git commit -m "descripción del cambio"
 git push
 ```
 
-GitHub Actions detecta el push, compila y publica sola. En 1–2 minutos ya está online. En tu iPhone se actualiza sola la próxima vez que abras la app.
+En 1–2 minutos queda publicada en **`https://norte.arcossz.workers.dev`**. En tu iPhone se actualiza sola la próxima vez que abrís la app (el Service Worker purga cachés viejos en cada deploy).
 
-## Si el repo no se llama "nexofit"
+Si alguna vez hace falta deployar a mano sin esperar el push (por ejemplo para probar algo puntual): `npx vite build && npx wrangler deploy` desde la raíz del repo.
 
-Editá `vite.config.js` línea 6:
-```js
-const BASE = "/tu-nombre-de-repo/";
+## Deploy del relay de notificaciones/chat (`worker/`)
+
+Es un **worker aparte** (`nexofit-push`) que maneja los recordatorios push y el puente de chat con NEXO. No se deploya solo con el `git push` de arriba — hay que hacerlo a mano desde `worker/`:
+
+```bash
+cd worker
+npx wrangler login       # una sola vez
+npx wrangler deploy
+npx wrangler secret put VAPID_PRIVATE_KEY   # solo si cambiaron las claves
+npx wrangler secret put AUTH_TOKEN          # solo si rotaste el token
 ```
-Poné el mismo nombre que le diste al repositorio, con `/` al principio y al final.
+
+Detalle completo en `worker/README.md`.
+
+### Rotar el token del relay
+
+El token vive en dos lugares que tienen que coincidir:
+
+1. `src/App.jsx` → constante `RELAY_TOKEN` (se re-deploya con el `git push` normal).
+2. El secreto `AUTH_TOKEN` del worker (`npx wrangler secret put AUTH_TOKEN` desde `worker/`).
+
+Si ya tenés la app instalada en el iPhone con push/chat configurados a mano (Más → Notificaciones), **ese token queda guardado en el `localStorage` del teléfono y no se actualiza solo** — hay que volver a pegarlo ahí después de rotar.
+
+## Instalar en tu iPhone
+
+1. Abrí `https://norte.arcossz.workers.dev` en **Safari** (obligatorio, no Chrome).
+2. Botón **Compartir** (cuadradito con flecha para arriba).
+3. Bajá y tocá **Agregar a inicio**.
+4. Nombre "NORTE" → **Agregar**.
+
+Aparece el ícono verde en tu home. Se abre en pantalla completa, sin barra de Safari.
+
+## Hablarle a NORTE (voz + NEXO)
+
+En la pestaña del chat con NEXO (orbe flotante):
+
+- **🎤 Mic**: dicta el mensaje (Web Speech API donde el navegador la soporte; si no, enfoca el input para usar el 🎤 del teclado de iOS).
+- **🔊/🔇**: prende o apaga que NORTE lea en voz alta las respuestas de NEXO. Tocando cualquier respuesta la vuelve a leer.
+- Si NEXO (`nexo_bridge.py` en tu PC) está apagado, el mensaje **no se pierde**: queda guardado en el relay y se entrega apenas se reconecta. Si la respuesta llega mientras no estás mirando el chat, aparece sola (y se lee) la próxima vez que lo abrís, y además llega como notificación push nativa.
 
 ## Problemas comunes
 
-**"La app se ve toda blanca / no carga en el celular"**
-- El `base` del `vite.config.js` no coincide con el nombre del repo. Corregilo y volvé a hacer `git push`.
-
-**"El workflow falla en GitHub Actions"**
-- Andá a la tab Actions, clic en el workflow rojo, mirá qué línea falló.
-- Suele ser `npm install` por versión de Node vieja: subí la versión en `deploy.yml` (línea `node-version: 20`).
+**"La app se ve toda blanca / no carga"**
+- Mirá la pestaña **Deployments** del Worker en el dashboard de Cloudflare — ahí está el log del build que corrió con el último push.
 
 **"Instalé la PWA pero no se actualiza"**
 - En Safari: Ajustes → Safari → Borrar historial y datos. Volvé a abrir el link e instalar.
@@ -126,23 +100,24 @@ Poné el mismo nombre que le diste al repositorio, con `/` al principio y al fin
 **"Los recordatorios no me llegan si la app está cerrada"**
 - Limitación de iOS con PWAs. Cargalos también en la app Recordatorios de tu iPhone.
 
+**"NEXO no me contesta"**
+- Revisá que `nexo_bridge.py` esté corriendo en tu PC. El mensaje queda encolado igual — en cuanto lo prendas, te llega la respuesta (por chat y por push).
+
 ## Estructura
 
 ```
-nexofit-pwa-gh/
+norte/
 ├── package.json
-├── vite.config.js            base configurada para /nexofit/
+├── vite.config.js        base "/" (Cloudflare Workers, dominio propio)
+├── wrangler.jsonc         deploy de NORTE (assets estáticos, ./dist)
 ├── index.html
-├── .gitignore
-├── .github/
-│   └── workflows/
-│       └── deploy.yml        deploy automático en cada push
-├── public/                   íconos
-│   ├── favicon.svg
-│   ├── apple-touch-icon.png
-│   ├── icon-192.png
-│   └── icon-512.png
-└── src/
-    ├── main.jsx
-    └── App.jsx               toda la app
+├── src/
+│   ├── main.jsx
+│   ├── App.jsx            toda la app (una sola pantalla, sin rutas)
+│   └── defaultProgram.js  rutina de gym por defecto
+├── public/                íconos, service worker push
+└── worker/                relay aparte: push nativo + puente de chat con NEXO
+    ├── src/index.js       endpoints (schedule, chat/*, agenda/*, cmd/*)
+    ├── src/webpush.js     Web Push (RFC 8291/8292) hecho a mano
+    └── README.md          deploy y funcionamiento del relay
 ```

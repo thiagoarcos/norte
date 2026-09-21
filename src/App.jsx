@@ -3,7 +3,8 @@ import {
   Target, Dumbbell, Sun, Moon, Salad, Settings, Trophy, Flame, Zap, Droplet,
   TrendingUp, Apple, Sprout, Lock, Unlock, Bell, Lightbulb, Smartphone, X, Calendar,
   Upload, Award, PersonStanding, Check as CheckIcon, Video, Pencil, AlertTriangle, ScanFace,
-  Bot, Send, Pause, Play, Clock, Menu,
+  Bot, Send, Pause, Play, Clock, Menu, Mic, Volume2, VolumeX,
+  Wallet, Coins, Landmark, DollarSign, LineChart, Plus,
 } from "lucide-react";
 import { buildDefaultProgram } from "./defaultProgram";
 
@@ -363,9 +364,13 @@ async function hashPin(pin) {
 }
 
 /* Build privada de NORTE: config bakeada.
-   OJO: este repo es PÚBLICO — el token y el PIN quedan visibles. Rotar el token si hace falta. */
+   OJO: este repo es PÚBLICO — el token y el PIN quedan visibles. Rotar el token si hace falta.
+   Token rotado el 2026-09-20 (el anterior quedó expuesto en el repo público). Al desplegar
+   esto hay que actualizar TAMBIÉN el secreto AUTH_TOKEN del worker (worker/, wrangler secret
+   put AUTH_TOKEN) y, en el teléfono ya instalado, Más → Notificaciones con el token nuevo
+   (el valor guardado en el localStorage del teléfono no se actualiza solo). */
 const RELAY_URL = "https://nexofit-push.arcossz.workers.dev";
-const RELAY_TOKEN = "8r3UIJNxdzJaDk6DVoHGMevRpPPUXXEY";
+const RELAY_TOKEN = "tilfy89L9iZ6l7RZ2JV4oq4xpt3IxiOa";
 // PIN por defecto 4444 = SHA-256 de "nexofit-salt:4444". Se provisiona en el primer
 // arranque si no hay PIN y no lo desactivaste a propósito (podés cambiarlo en Más → Seguridad).
 const DEFAULT_PIN_HASH = "0dfd3b448fe1bc90a4d2b1a2e2bb8332d924380758640fbd83553cf82e9274e6";
@@ -373,7 +378,7 @@ try {
   if (typeof localStorage !== "undefined" && !localStorage.getItem(PIN_KEY) && localStorage.getItem(PIN_OPTOUT) !== "1") {
     localStorage.setItem(PIN_KEY, DEFAULT_PIN_HASH);
   }
-} catch (e) {}
+} catch (e) { /* ignorar */ }
 
 /* ---------- Face ID / huella vía WebAuthn (bloqueo local del dispositivo) ---------- */
 const bioSupported = () =>
@@ -539,6 +544,20 @@ const initialState = {
   goals: { kcal: 2500, protein: 140, carbs: 300, fat: 80, water: 8 },
   customTips: [],
   cut: null,
+  // Plata: patrimonio en wallets/cuentas. moneda = "USD" | "ARS"; tipo = "crypto" | "pesos" | "inversion"
+  // saldo = saldo actual; history = { "YYYY-MM-DD": saldo } (snapshot al actualizar)
+  financeSeedV: 1, // subir para re-sembrar la lista de cuentas "de fábrica" (conserva saldos existentes por id)
+  finance: {
+    usdRate: 1400, // ARS por USD (dólar de referencia para el patrimonio total; editable)
+    rateUpdated: null,
+    accounts: [
+      { id: "acc-astropay", name: "AstroPay", tipo: "crypto", moneda: "USD", saldo: 0, icon: "💸", history: {} },
+      { id: "acc-wallbit", name: "Wallbit", tipo: "crypto", moneda: "USD", saldo: 0, icon: "🪙", history: {} },
+      { id: "acc-mercadopago", name: "Mercado Pago", tipo: "pesos", moneda: "ARS", saldo: 0, icon: "💳", history: {} },
+      { id: "acc-naranjax", name: "Naranja X", tipo: "pesos", moneda: "ARS", saldo: 0, icon: "🍊", history: {} },
+      { id: "acc-iol", name: "InvertirOnline", tipo: "inversion", moneda: "ARS", saldo: 0, icon: "📈", history: {} },
+    ],
+  },
   push: { url: RELAY_URL, token: RELAY_TOKEN, enabled: false },
   agendaAlerts: { on: true, lead: 15 }, // avisar `lead` minutos antes de cada bloque
   scheduleSeedV: 2, // subir cuando cambie el cronograma "de fábrica" para forzar la actualización
@@ -576,9 +595,16 @@ async function loadState() {
     try {
       const raw = localStorage.getItem(key);
       if (raw) return JSON.parse(raw);
-    } catch (e) {}
+    } catch (e) { /* ignorar */ }
   }
   return null;
+}
+
+/* Formato de plata: USD con hasta 2 decimales, ARS redondeado. */
+function fmtMoney(n, moneda) {
+  const num = Number(n) || 0;
+  if (moneda === "USD") return "US$ " + num.toLocaleString("es-AR", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+  return "$ " + Math.round(num).toLocaleString("es-AR");
 }
 
 /* ============ componentes base ============ */
@@ -1074,6 +1100,12 @@ export default function App() {
   const [timerTotal, setTimerTotal] = useState(60);
   const [timerPaused, setTimerPaused] = useState(null); // segundos restantes si está en pausa
   const [confirmReset, setConfirmReset] = useState(false);
+  const [editAcc, setEditAcc] = useState(null);     // id de cuenta con el panel de edición abierto
+  const [saldoDraft, setSaldoDraft] = useState({}); // { [accId]: texto } del input "nuevo saldo"
+  const [addingAcc, setAddingAcc] = useState(false);
+  const [newAcc, setNewAcc] = useState({ name: "", tipo: "pesos", moneda: "ARS", icon: "💰" });
+  const [editRate, setEditRate] = useState(false);
+  const [rateDraft, setRateDraft] = useState("");
   const [showCalc, setShowCalc] = useState(false);
   const [showChat, setShowChat] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -1083,6 +1115,9 @@ export default function App() {
   const [chatInput, setChatInput] = useState("");
   const [chatBusy, setChatBusy] = useState(false);
   const [listening, setListening] = useState(false); // dictado por voz activo
+  const [ttsOn, setTtsOn] = useState(() => {
+    try { return localStorage.getItem("nexofit-tts-v1") !== "0"; } catch (e) { return true; }
+  }); // lee en voz alta las respuestas de NEXO
   const recogRef = useRef(null);
   const chatScrollRef = useRef(null);
   const firedRef = useRef({});
@@ -1104,9 +1139,19 @@ export default function App() {
         // Si una semilla quedó vieja, refrescamos ese dato (el resto se conserva).
         const schedStale = (s.scheduleSeedV || 0) < initialState.scheduleSeedV;
         const progStale = (s.programSeedV || 0) < initialState.programSeedV;
+        const finStale = (s.financeSeedV || 0) < initialState.financeSeedV;
+        // Finanzas: si hay cuentas guardadas las respetamos; si la semilla quedó vieja,
+        // sumamos las cuentas "de fábrica" que falten (por id) sin pisar saldos ya cargados.
+        const savedFin = s.finance || {};
+        const savedAccs = savedFin.accounts || prev.finance.accounts;
+        const mergedAccs = finStale
+          ? [...savedAccs, ...initialState.finance.accounts.filter((d) => !savedAccs.some((a) => a.id === d.id))]
+          : savedAccs;
         return {
           ...prev, ...s,
           goals: { ...prev.goals, ...(s.goals || {}) },
+          finance: { ...prev.finance, ...savedFin, accounts: mergedAccs },
+          financeSeedV: initialState.financeSeedV,
           program: progStale ? initialState.program : (s.program || prev.program),
           programSeedV: initialState.programSeedV,
           schedule: schedStale ? initialState.schedule : (s.schedule || prev.schedule),
@@ -1121,7 +1166,7 @@ export default function App() {
     if (!loaded) return;
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async () => {
-      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) {}
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) { /* ignorar */ }
     }, 500);
   }, [state, loaded]);
 
@@ -1223,6 +1268,59 @@ export default function App() {
 
   const flash = (msg, ms = 5000) => { setBanner(msg); setTimeout(() => setBanner(null), ms); };
 
+  /* ---------- Plata: patrimonio y conversión de moneda ---------- */
+  const fin = state.finance || { usdRate: 1400, accounts: [] };
+  const usdRate = Number(fin.usdRate) || 1400;
+  const accounts = fin.accounts || [];
+  const toARS = (a) => (a.moneda === "USD" ? (Number(a.saldo) || 0) * usdRate : (Number(a.saldo) || 0));
+  const totalARS = accounts.reduce((sum, a) => sum + toARS(a), 0);
+  const totalUSD = usdRate ? totalARS / usdRate : 0;
+  const FIN_TIPOS = {
+    crypto: { label: "Crypto", Icon: Coins, color: C.amber },
+    pesos: { label: "Pesos", Icon: Landmark, color: C.primary },
+    inversion: { label: "Inversiones", Icon: LineChart, color: C.accent },
+  };
+  const finByTipo = ["crypto", "pesos", "inversion"].map((t) => ({
+    tipo: t,
+    ...FIN_TIPOS[t],
+    accounts: accounts.filter((a) => a.tipo === t),
+    totalARS: accounts.filter((a) => a.tipo === t).reduce((s, a) => s + toARS(a), 0),
+  })).filter((g) => g.accounts.length);
+
+  // Variación del patrimonio en los últimos 30 días (usando el snapshot más viejo dentro de la ventana)
+  const finTrend = (() => {
+    const cutoff = dstr(new Date(Date.now() - 30 * 86400000));
+    let base = 0, hasBase = false;
+    accounts.forEach((a) => {
+      const keys = Object.keys(a.history || {}).filter((k) => k >= cutoff).sort();
+      if (keys.length) {
+        const v = a.history[keys[0]];
+        base += a.moneda === "USD" ? (Number(v) || 0) * usdRate : (Number(v) || 0);
+        hasBase = true;
+      } else {
+        base += toARS(a); // sin historial: asumimos que estuvo estable
+      }
+    });
+    if (!hasBase) return null;
+    return totalARS - base;
+  })();
+
+  // Registrar un nuevo saldo para una cuenta (guarda snapshot del día)
+  const setSaldo = (id, valor) => {
+    const v = Number(String(valor).replace(/[^\d.,-]/g, "").replace(/\./g, "").replace(",", "."));
+    if (!Number.isFinite(v)) { flash("Poné un número válido"); return; }
+    up((s) => {
+      const a = s.finance.accounts.find((x) => x.id === id);
+      if (!a) return s;
+      a.saldo = v;
+      a.history = a.history || {};
+      a.history[today] = v;
+      return s;
+    });
+    setSaldoDraft((d) => { const n = { ...d }; delete n[id]; return n; });
+    flash("💰 Saldo actualizado");
+  };
+
   /* ---------- Notificaciones push (worker/ en Cloudflare) ---------- */
   const cutActive = !!state.cut;
   const pushCfg = {
@@ -1242,7 +1340,52 @@ export default function App() {
     } catch (e) { return null; }
   };
 
-  // Chat con NEXO (asistente) vía el relay del worker. Requiere el bridge corriendo en la PC.
+  // TTS: lee en voz alta las respuestas de NEXO (Web Speech Synthesis, soportado en Safari/iOS).
+  const speak = (text) => {
+    if (!ttsOn || !text) return;
+    try {
+      if (!("speechSynthesis" in window)) return;
+      window.speechSynthesis.cancel(); // corta lo que estaba leyendo antes de arrancar lo nuevo
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = "es-AR";
+      window.speechSynthesis.speak(u);
+    } catch (e) { /* ignorar */ }
+  };
+  const toggleTts = () => {
+    setTtsOn((v) => {
+      const next = !v;
+      try { localStorage.setItem("nexofit-tts-v1", next ? "1" : "0"); } catch (e) { /* ignorar */ }
+      if (!next) { try { window.speechSynthesis?.cancel(); } catch (e) { /* ignorar */ } }
+      return next;
+    });
+  };
+
+  // Revisa si llegó una respuesta de NEXO mientras la app estaba cerrada o el chat dejó
+  // de esperar (el mensaje sigue guardado en el relay aunque el bridge haya tardado más
+  // de los ~70s que espera sendChat). No bloquea: /chat/peek drena sin long-poll.
+  const checkPendingReplies = async () => {
+    if (!pushCfg.url || !pushCfg.token) return;
+    try {
+      const pr = await pushCall("/chat/peek");
+      if (!pr || !pr.ok) return;
+      const pj = await pr.json().catch(() => null);
+      for (const rep of (pj && pj.replies) || []) {
+        setChatMsgs((m) => [...m, { id: uid(), role: "nexo", text: rep.text }]);
+        speak(rep.text);
+      }
+    } catch (e) { /* ignorar */ }
+  };
+  useEffect(() => {
+    if (showChat) checkPendingReplies();
+    const onVis = () => { if (document.visibilityState === "visible") checkPendingReplies(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showChat]);
+
+  // Chat con NEXO (asistente) vía el relay del worker. El mensaje queda guardado en el
+  // relay (Durable Object) apenas se manda: si NEXO/nexo_bridge.py está offline, no se
+  // pierde — lo drena en cuanto se reconecte y checkPendingReplies() lo trae solo.
   const sendChat = async (override) => {
     const text = (typeof override === "string" ? override : chatInput).trim();
     if (!text || chatBusy) return;
@@ -1268,10 +1411,10 @@ export default function App() {
         if (!pr || !pr.ok) break;
         const pj = await pr.json().catch(() => null);
         for (const rep of (pj && pj.replies) || []) {
-          if (rep.id === id) { setChatMsgs((m) => [...m, { id: uid(), role: "nexo", text: rep.text }]); answered = true; }
+          if (rep.id === id) { setChatMsgs((m) => [...m, { id: uid(), role: "nexo", text: rep.text }]); speak(rep.text); answered = true; }
         }
       }
-      if (!answered) setChatMsgs((m) => [...m, { id: uid(), role: "nexo", text: "NEXO no respondió. ¿Está corriendo nexo_bridge.py en tu PC (con NEXO prendido)?" }]);
+      if (!answered) setChatMsgs((m) => [...m, { id: uid(), role: "nexo", text: "NEXO está desconectado ahora mismo. Tu mensaje quedó guardado — en cuanto prendas nexo_bridge.py te va a contestar y te aviso." }]);
     } catch (e) {
       setChatMsgs((m) => [...m, { id: uid(), role: "nexo", text: "Error de conexión." }]);
     }
@@ -1284,10 +1427,10 @@ export default function App() {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) {
       flash("Tocá el 🎤 del teclado para dictarle a NEXO");
-      try { document.getElementById("norteChatInput")?.focus(); } catch (e) {}
+      try { document.getElementById("norteChatInput")?.focus(); } catch (e) { /* ignorar */ }
       return;
     }
-    if (listening) { try { recogRef.current?.stop(); } catch (e) {} return; }
+    if (listening) { try { recogRef.current?.stop(); } catch (e) { /* ignorar */ } return; }
     const r = new SR();
     r.lang = "es-AR"; r.interimResults = true; r.continuous = false;
     r.onresult = (e) => {
@@ -1598,6 +1741,14 @@ export default function App() {
         habitos: habitsToday.map((h) => ({ nombre: h.name, hecho: !!h.history[today] })),
         peso: bodyWeight || null,
         cut: cut ? { activo: true, bf: cutBf, fase: cutPhase?.name, objetivo: cutPhase?.target, misiones: `${cutMissionsDone}/${cutMissions.length}` } : { activo: false },
+        finanzas: {
+          usdRate,
+          patrimonioARS: Math.round(totalARS),
+          patrimonioUSD: Math.round(totalUSD),
+          variacion30dARS: finTrend != null ? Math.round(finTrend) : null,
+          porTipo: finByTipo.map((g) => ({ tipo: g.tipo, ars: Math.round(g.totalARS) })),
+          cuentas: accounts.map((a) => ({ nombre: a.name, tipo: a.tipo, moneda: a.moneda, saldo: Number(a.saldo) || 0, ars: Math.round(toARS(a)) })),
+        },
       };
       pushCall("/agenda/push", { schedule: state.schedule || [], snapshot });
     }, 1200);
@@ -1779,7 +1930,7 @@ export default function App() {
               padding: "8px 14px", fontWeight: 800, fontSize: 13, cursor: "pointer", fontFamily: FONT,
             }}>Instalar</button>
             <button onClick={() => {
-              try { localStorage.setItem("nexofit-install-hidden", "1"); } catch (e) {}
+              try { localStorage.setItem("nexofit-install-hidden", "1"); } catch (e) { /* ignorar */ }
               setInstallHidden(true);
             }} style={{
               background: "transparent", border: "none", color: "rgba(255,255,255,0.7)",
@@ -1961,6 +2112,204 @@ export default function App() {
           })}
         </div>
       </div>
+    );
+  }
+
+  function Finanzas() {
+    const FIN_EMOJIS = ["💰","💸","🪙","💳","🏦","📈","📊","🍊","💵","💶","🐷","⭐","🚀","🔷"];
+    const moneyBadge = (moneda) => (
+      <span style={{
+        fontSize: 10.5, fontWeight: 800, letterSpacing: 0.3, padding: "2px 7px", borderRadius: 999,
+        background: moneda === "USD" ? "rgba(52,199,89,0.14)" : C.soft,
+        color: moneda === "USD" ? "#2e9e4f" : C.sub,
+      }}>{moneda}</span>
+    );
+
+    const rate = (
+      <button onClick={() => { setEditRate(true); setRateDraft(String(usdRate)); }} style={{
+        border: "none", background: "transparent", cursor: "pointer", fontFamily: FONT,
+        color: "rgba(255,255,255,0.9)", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", gap: 4,
+      }}>
+        <DollarSign size={13} /> 1 USD = ${usdRate.toLocaleString("es-AR")} <Pencil size={11} />
+      </button>
+    );
+
+    return (
+      <>
+        <PageHeader title="Plata" subtitle="Patrimonio" />
+
+        {/* Hero: patrimonio total */}
+        <div style={{
+          borderRadius: 22, padding: 20, color: "#fff",
+          background: `linear-gradient(135deg, ${C.primary}, ${C.accent})`,
+          boxShadow: `0 10px 30px ${C.primaryGlow}`,
+        }}>
+          <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", opacity: 0.85 }}>Patrimonio total</div>
+          <div style={{ fontSize: 34, fontWeight: 900, letterSpacing: -1, marginTop: 4 }}>{fmtMoney(totalARS, "ARS")}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 6, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 15, fontWeight: 800, opacity: 0.95 }}>≈ {fmtMoney(totalUSD, "USD")}</span>
+            {finTrend != null && finTrend !== 0 && (
+              <span style={{ fontSize: 12.5, fontWeight: 800, padding: "3px 9px", borderRadius: 999, background: "rgba(255,255,255,0.2)", display: "flex", alignItems: "center", gap: 3 }}>
+                <TrendingUp size={13} style={{ transform: finTrend < 0 ? "scaleY(-1)" : "none" }} />
+                {finTrend > 0 ? "+" : ""}{fmtMoney(finTrend, "ARS")} · 30d
+              </span>
+            )}
+          </div>
+          <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid rgba(255,255,255,0.22)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            {editRate ? (
+              <div style={{ display: "flex", gap: 6, alignItems: "center", width: "100%" }}>
+                <span style={{ fontSize: 12, fontWeight: 700, whiteSpace: "nowrap" }}>1 USD =</span>
+                <input autoFocus value={rateDraft} inputMode="numeric" onChange={(e) => setRateDraft(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") { up((s) => { s.finance.usdRate = Number(rateDraft) || usdRate; s.finance.rateUpdated = today; return s; }); setEditRate(false); flash("Cotización actualizada"); } }}
+                  style={{ flex: 1, minWidth: 0, padding: "6px 10px", borderRadius: 10, border: "none", fontSize: 14, fontFamily: FONT, fontWeight: 700 }} />
+                <Btn small kind="dark" onClick={() => { up((s) => { s.finance.usdRate = Number(rateDraft) || usdRate; s.finance.rateUpdated = today; return s; }); setEditRate(false); flash("Cotización actualizada"); }}>OK</Btn>
+              </div>
+            ) : rate}
+          </div>
+        </div>
+
+        {/* Reparto por tipo */}
+        {totalARS > 0 && finByTipo.length > 0 && (
+          <Card style={{ marginTop: 12 }}>
+            <div style={{ display: "flex", height: 12, borderRadius: 999, overflow: "hidden", marginBottom: 12 }}>
+              {finByTipo.map((g) => (
+                <div key={g.tipo} title={g.label} style={{ width: `${(g.totalARS / totalARS) * 100}%`, background: g.color }} />
+              ))}
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {finByTipo.map((g) => (
+                <div key={g.tipo} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <span style={{ width: 10, height: 10, borderRadius: 3, background: g.color, flexShrink: 0 }} />
+                  <g.Icon size={15} color={C.sub} />
+                  <span style={{ fontWeight: 800, fontSize: 14, flex: 1 }}>{g.label}</span>
+                  <span style={{ fontWeight: 700, fontSize: 13, color: C.sub }}>{Math.round((g.totalARS / totalARS) * 100)}%</span>
+                  <span style={{ fontWeight: 800, fontSize: 14, minWidth: 92, textAlign: "right" }}>{fmtMoney(g.totalARS, "ARS")}</span>
+                </div>
+              ))}
+            </div>
+          </Card>
+        )}
+
+        {/* Cuentas agrupadas por tipo */}
+        {["crypto", "pesos", "inversion"].map((tipoKey) => {
+          const meta = FIN_TIPOS[tipoKey];
+          const accs = accounts.filter((a) => a.tipo === tipoKey);
+          if (!accs.length) return null;
+          return (
+            <div key={tipoKey}>
+              <SectionTitle>{meta.label}</SectionTitle>
+              {accs.map((a) => {
+                const editing = editAcc === a.id;
+                const hist = Object.keys(a.history || {}).sort();
+                const lastUpd = hist.length ? hist[hist.length - 1] : null;
+                const prevVal = hist.length > 1 ? a.history[hist[hist.length - 2]] : null;
+                const delta = prevVal != null ? (Number(a.saldo) || 0) - prevVal : null;
+                return (
+                  <Card key={a.id} style={{ marginTop: 10 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                      <span style={{ fontSize: 26, flexShrink: 0 }}>{a.icon}</span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                          <span style={{ fontWeight: 800, fontSize: 15.5, letterSpacing: -0.2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.name}</span>
+                          {moneyBadge(a.moneda)}
+                        </div>
+                        <div style={{ fontSize: 12, color: C.sub, fontWeight: 600, marginTop: 2 }}>
+                          {lastUpd ? `Actualizado ${lastUpd === today ? "hoy" : lastUpd}` : "Sin actualizar"}
+                          {delta != null && delta !== 0 && (
+                            <span style={{ color: delta > 0 ? "#2e9e4f" : C.red, fontWeight: 800 }}> · {delta > 0 ? "+" : ""}{fmtMoney(delta, a.moneda)}</span>
+                          )}
+                        </div>
+                      </div>
+                      <div style={{ textAlign: "right", flexShrink: 0 }}>
+                        <div style={{ fontWeight: 900, fontSize: 17, letterSpacing: -0.4 }}>{fmtMoney(a.saldo, a.moneda)}</div>
+                        {a.moneda === "USD" && <div style={{ fontSize: 11.5, color: C.sub, fontWeight: 600 }}>≈ {fmtMoney(toARS(a), "ARS")}</div>}
+                      </div>
+                      <button onClick={() => setEditAcc(editing ? null : a.id)}
+                        style={{ width: 30, height: 26, borderRadius: 8, border: "none", cursor: "pointer", background: C.soft, color: C.sub, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                        {editing ? <X size={14} /> : <Pencil size={14} />}
+                      </button>
+                    </div>
+
+                    {!editing && (
+                      <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                        <Input placeholder={`Nuevo saldo (${a.moneda})`} inputMode="decimal"
+                          value={saldoDraft[a.id] || ""}
+                          onChange={(e) => setSaldoDraft({ ...saldoDraft, [a.id]: e.target.value })}
+                          onKeyDown={(e) => e.key === "Enter" && setSaldo(a.id, saldoDraft[a.id])} />
+                        <Btn onClick={() => setSaldo(a.id, saldoDraft[a.id])}>Guardar</Btn>
+                      </div>
+                    )}
+
+                    {editing && (
+                      <div style={{ marginTop: 12 }}>
+                        <div style={lblStyle}>NOMBRE</div>
+                        <Input value={a.name} onChange={(e) => up((s) => { s.finance.accounts.find((x) => x.id === a.id).name = e.target.value; return s; })} />
+                        <div style={{ ...lblStyle, marginTop: 10 }}>TIPO</div>
+                        <Segmented options={[["crypto", "Crypto"], ["pesos", "Pesos"], ["inversion", "Inversión"]]}
+                          value={a.tipo} onChange={(v) => up((s) => { s.finance.accounts.find((x) => x.id === a.id).tipo = v; return s; })} />
+                        <div style={{ ...lblStyle, marginTop: 10 }}>MONEDA</div>
+                        <Segmented options={[["ARS", "Pesos ($)"], ["USD", "Dólares (US$)"]]}
+                          value={a.moneda} onChange={(v) => up((s) => { s.finance.accounts.find((x) => x.id === a.id).moneda = v; return s; })} />
+                        <div style={{ ...lblStyle, marginTop: 10 }}>ÍCONO</div>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                          {FIN_EMOJIS.map((em) => (
+                            <button key={em} onClick={() => up((s) => { s.finance.accounts.find((x) => x.id === a.id).icon = em; return s; })}
+                              style={{ fontSize: 18, padding: "6px 8px", borderRadius: 10, cursor: "pointer", border: "none", background: a.icon === em ? C.primarySoft : C.soft }}>{em}</button>
+                          ))}
+                        </div>
+                        <div style={{ marginTop: 12, textAlign: "right" }}>
+                          <Btn kind="danger" small onClick={() => { setEditAcc(null); up((s) => { s.finance.accounts = s.finance.accounts.filter((x) => x.id !== a.id); return s; }); }}>Borrar cuenta</Btn>
+                        </div>
+                      </div>
+                    )}
+                  </Card>
+                );
+              })}
+            </div>
+          );
+        })}
+
+        {/* Agregar cuenta */}
+        <SectionTitle>Agregar</SectionTitle>
+        {addingAcc ? (
+          <Card>
+            <div style={lblStyle}>NOMBRE</div>
+            <Input placeholder="Ej: Binance, Banco, Lemon…" value={newAcc.name} onChange={(e) => setNewAcc({ ...newAcc, name: e.target.value })} />
+            <div style={{ ...lblStyle, marginTop: 10 }}>TIPO</div>
+            <Segmented options={[["crypto", "Crypto"], ["pesos", "Pesos"], ["inversion", "Inversión"]]}
+              value={newAcc.tipo} onChange={(v) => setNewAcc({ ...newAcc, tipo: v, moneda: v === "crypto" ? "USD" : newAcc.moneda })} />
+            <div style={{ ...lblStyle, marginTop: 10 }}>MONEDA</div>
+            <Segmented options={[["ARS", "Pesos ($)"], ["USD", "Dólares (US$)"]]}
+              value={newAcc.moneda} onChange={(v) => setNewAcc({ ...newAcc, moneda: v })} />
+            <div style={{ ...lblStyle, marginTop: 10 }}>ÍCONO</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {FIN_EMOJIS.map((em) => (
+                <button key={em} onClick={() => setNewAcc({ ...newAcc, icon: em })}
+                  style={{ fontSize: 18, padding: "6px 8px", borderRadius: 10, cursor: "pointer", border: "none", background: newAcc.icon === em ? C.primarySoft : C.soft }}>{em}</button>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+              <Btn kind="ghost" onClick={() => { setAddingAcc(false); setNewAcc({ name: "", tipo: "pesos", moneda: "ARS", icon: "💰" }); }} style={{ flex: 1 }}>Cancelar</Btn>
+              <Btn style={{ flex: 1 }} onClick={() => {
+                if (!newAcc.name.trim()) { flash("Poné un nombre"); return; }
+                up((s) => { s.finance.accounts.push({ id: uid(), name: newAcc.name.trim(), tipo: newAcc.tipo, moneda: newAcc.moneda, saldo: 0, icon: newAcc.icon, history: {} }); return s; });
+                setAddingAcc(false); setNewAcc({ name: "", tipo: "pesos", moneda: "ARS", icon: "💰" });
+                flash("Cuenta agregada");
+              }}>Crear cuenta</Btn>
+            </div>
+          </Card>
+        ) : (
+          <Btn kind="soft" onClick={() => setAddingAcc(true)} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+            <Plus size={17} /> Nueva wallet o cuenta
+          </Btn>
+        )}
+
+        <div style={{ fontSize: 12, color: C.sub, fontWeight: 600, textAlign: "center", margin: "16px 8px 4px", lineHeight: 1.5 }}>
+          {pushCfg.url && pushCfg.token
+            ? "🔄 Tu patrimonio se sincroniza con NEXO automáticamente."
+            : "Configurá el servidor en Más → Notificaciones para sincronizar tu patrimonio con NEXO."}
+        </div>
+      </>
     );
   }
 
@@ -3459,7 +3808,7 @@ export default function App() {
                 <Btn small style={{ background: C.red }} onClick={async () => {
                   setConfirmReset(false);
                   setState(structuredClone(initialState));
-                  try { localStorage.removeItem(STORAGE_KEY); } catch (e) {}
+                  try { localStorage.removeItem(STORAGE_KEY); } catch (e) { /* ignorar */ }
                 }}>Borrar todo</Btn>
               </div>
             </div>
@@ -3548,6 +3897,7 @@ export default function App() {
     { id: "hoy", label: "Hoy", Icon: Sun },
     { id: "habitos", label: "Hábitos", Icon: Target },
     { id: "dieta", label: "Dieta", Icon: Salad },
+    { id: "plata", label: "Plata", Icon: Wallet },
     { id: "mas", label: "Más", Icon: Settings },
   ];
   const curTab = tabs.find((t) => t.id === tab) || tabs[0];
@@ -3609,6 +3959,10 @@ export default function App() {
               <div style={{ fontWeight: 800, fontSize: 16 }}>NEXO</div>
               <div style={{ fontSize: 11.5, color: C.sub, fontWeight: 600 }}>Tu asistente</div>
             </div>
+            <button onClick={toggleTts} aria-label={ttsOn ? "Silenciar respuestas" : "Leer respuestas en voz alta"}
+              style={{ background: "none", border: "none", color: ttsOn ? C.primary : C.sub, cursor: "pointer", display: "flex" }}>
+              {ttsOn ? <Volume2 size={20} /> : <VolumeX size={20} />}
+            </button>
             <button onClick={() => setShowChat(false)} style={{ background: "none", border: "none", color: C.sub, cursor: "pointer", display: "flex" }}><X size={22} /></button>
           </div>
 
@@ -3623,13 +3977,14 @@ export default function App() {
             )}
             {chatMsgs.map((m) => (
               <div key={m.id} style={{ alignSelf: m.role === "me" ? "flex-end" : "flex-start", maxWidth: "82%" }}>
-                <div style={{
+                <div onClick={m.role === "nexo" ? () => speak(m.text) : undefined} style={{
                   padding: "10px 13px", borderRadius: 16, fontSize: 14.5, lineHeight: 1.4, whiteSpace: "pre-wrap", wordBreak: "break-word",
                   background: m.role === "me" ? `linear-gradient(135deg, ${C.primary}, ${C.accent})` : C.card,
                   color: m.role === "me" ? "#fff" : C.ink,
                   border: m.role === "me" ? "none" : `1px solid ${C.line}`,
                   borderBottomRightRadius: m.role === "me" ? 4 : 16,
                   borderBottomLeftRadius: m.role === "me" ? 16 : 4,
+                  cursor: m.role === "nexo" ? "pointer" : "default",
                 }}>{m.text}</div>
               </div>
             ))}
@@ -3639,9 +3994,23 @@ export default function App() {
           </div>
 
           <div style={{ display: "flex", gap: 8, padding: "12px 14px calc(12px + env(safe-area-inset-bottom))", borderTop: `1px solid ${C.line}`, background: C.card }}>
-            <Input value={chatInput} placeholder="Escribí un mensaje…" style={{ flex: 1 }}
+            <Input id="norteChatInput" value={chatInput} placeholder="Escribí o hablale a NEXO…" style={{ flex: 1 }}
               onChange={(e) => setChatInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); } }} />
+            <button
+              onClick={toggleMic}
+              onMouseDown={(e) => e.preventDefault()}
+              disabled={chatBusy}
+              aria-label={listening ? "Detener dictado" : "Hablarle a NEXO"}
+              style={{
+                border: `1.5px solid ${listening ? C.primary : C.line}`, borderRadius: 12, fontFamily: FONT, flexShrink: 0,
+                padding: "12px 13px", display: "flex", alignItems: "center", justifyContent: "center",
+                background: listening ? `${C.primary}1a` : "transparent", color: listening ? C.primary : C.sub,
+                cursor: chatBusy ? "default" : "pointer", opacity: chatBusy ? 0.5 : 1,
+                animation: listening ? "nortePulse 1.1s ease-in-out infinite" : "none",
+              }}>
+              <Mic size={16} />
+            </button>
             <button
               onClick={sendChat}
               onMouseDown={(e) => e.preventDefault()}  // no le saca el foco al input: en iOS así el tap sí dispara
@@ -3716,6 +4085,7 @@ export default function App() {
           {tab === "habitos" && Habitos()}
           {tab === "gym" && Gym()}
           {tab === "dieta" && Dieta()}
+          {tab === "plata" && Finanzas()}
           {tab === "mas" && Mas()}
         </div>
       </div>

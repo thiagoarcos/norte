@@ -96,12 +96,24 @@ export class Scheduler {
     if (url.pathname === "/chat/reply") {
       if (!body.id || body.text == null) return json({ error: "faltan id/text" }, 400);
       await this.state.storage.put("cout:" + body.id, { id: body.id.toString(), text: body.text.toString(), at: Date.now() });
+      // Respaldo por si la app ya se rindió esperando (dejó de hacer /chat/poll) o está
+      // cerrada: manda push nativo también, así la respuesta llega igual.
+      const sub = await this.state.storage.get("sub");
+      if (sub) {
+        try { await sendPush(sub, { title: "NEXO", body: body.text.toString().slice(0, 180) }, this.env, 300); } catch (e) {}
+      }
       return json({ ok: true });
     }
 
     if (url.pathname === "/chat/poll") {
       // la app llama acá (long-poll) esperando la respuesta de NEXO
       return json({ replies: await this.waitDrain("cout:", 20000) });
+    }
+
+    if (url.pathname === "/chat/peek") {
+      // como /chat/poll pero sin long-poll: para revisar respuestas que quedaron
+      // pendientes de una consulta anterior (app cerrada, timeout, etc.) sin bloquear.
+      return json({ replies: await this.drain("cout:") });
     }
 
     if (url.pathname === "/chat/status") {
