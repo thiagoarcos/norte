@@ -4,7 +4,7 @@ import {
   TrendingUp, Apple, Sprout, Lock, Unlock, Bell, Lightbulb, Smartphone, X, Calendar,
   Upload, Award, PersonStanding, Check as CheckIcon, Video, Pencil, AlertTriangle, ScanFace,
   Bot, Send, Pause, Play, Clock, Menu, Mic, Volume2, VolumeX,
-  Wallet, Coins, Landmark, DollarSign, LineChart, Plus, RefreshCw,
+  Wallet, Coins, Landmark, DollarSign, LineChart, Plus, RefreshCw, Ghost, Building2,
 } from "lucide-react";
 import { buildDefaultProgram } from "./defaultProgram";
 
@@ -1107,11 +1107,22 @@ export default function App() {
   const [editRate, setEditRate] = useState(false);
   const [rateDraft, setRateDraft] = useState("");
   const [rateLoading, setRateLoading] = useState(false);
+  const [addingWallet, setAddingWallet] = useState(false);
+  const [newWallet, setNewWallet] = useState({ name: "Phantom", address: "", icon: "👻" });
+  const [walletSyncing, setWalletSyncing] = useState({}); // { [accId]: true } mientras sincroniza
+  const [trending, setTrending] = useState([]);      // top movidas de meme coins (CoinGecko, sin login)
+  const [trendingLoading, setTrendingLoading] = useState(false);
+  const [trendingUpdated, setTrendingUpdated] = useState(null);
+  const [addingIol, setAddingIol] = useState(false);
+  const [iolModal, setIolModal] = useState(null);   // id de cuenta IOL pidiendo credenciales para (re)sincronizar
+  const [iolCreds, setIolCreds] = useState({ name: "IOL", user: "", pass: "" }); // nunca se persiste — solo en memoria de la sesión
+  const [iolLoading, setIolLoading] = useState(false);
   const [showCalc, setShowCalc] = useState(false);
   const [showChat, setShowChat] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [kbInset, setKbInset] = useState(0); // alto del teclado en iOS (visualViewport)
   const swipeRef = useRef({ x: 0, y: 0 });
+  const importFileRef = useRef(null);
   const [chatMsgs, setChatMsgs] = useState([]);
   const [chatInput, setChatInput] = useState("");
   const [chatBusy, setChatBusy] = useState(false);
@@ -1269,6 +1280,38 @@ export default function App() {
 
   const flash = (msg, ms = 5000) => { setBanner(msg); setTimeout(() => setBanner(null), ms); };
 
+  // Backup local: todo vive solo en el localStorage del teléfono — si se borra Safari o se
+  // reinstala la PWA, se pierde. Exportar/importar un JSON es la única red de seguridad.
+  const exportData = () => {
+    try {
+      const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `norte-backup-${today}.json`;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+      flash("📦 Backup descargado");
+    } catch (e) {
+      flash("No se pudo generar el backup");
+    }
+  };
+  const importData = (file) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(reader.result);
+        if (!parsed || typeof parsed !== "object" || !parsed.habits) throw new Error("formato inválido");
+        if (!confirm("¿Reemplazar todos tus datos actuales con este backup? No se puede deshacer.")) return;
+        setState(parsed);
+        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed)); } catch (e) { /* ignorar */ }
+        flash("✅ Datos restaurados desde el backup");
+      } catch (e) {
+        flash("Ese archivo no es un backup válido de NORTE");
+      }
+    };
+    reader.readAsText(file);
+  };
+
   /* ---------- Plata: patrimonio y conversión de moneda ---------- */
   const fin = state.finance || { usdRate: 1400, accounts: [] };
   const usdRate = Number(fin.usdRate) || 1400;
@@ -1278,10 +1321,13 @@ export default function App() {
   const totalUSD = usdRate ? totalARS / usdRate : 0;
   const FIN_TIPOS = {
     crypto: { label: "Crypto", Icon: Coins, color: C.amber },
+    wallet: { label: "Wallets on-chain", Icon: Ghost, color: "#9945FF" },
+    broker: { label: "Brokers", Icon: Building2, color: "#0EA5E9" },
     pesos: { label: "Pesos", Icon: Landmark, color: C.primary },
     inversion: { label: "Inversiones", Icon: LineChart, color: C.accent },
   };
-  const finByTipo = ["crypto", "pesos", "inversion"].map((t) => ({
+  const FIN_GRUPOS = ["crypto", "wallet", "broker", "pesos", "inversion"];
+  const finByTipo = FIN_GRUPOS.map((t) => ({
     tipo: t,
     ...FIN_TIPOS[t],
     accounts: accounts.filter((a) => a.tipo === t),
@@ -1341,6 +1387,121 @@ export default function App() {
   // Al entrar a "Plata" refresca sola una vez por día (no pega a la API en cada render).
   useEffect(() => {
     if (tab === "plata" && state.finance?.rateUpdated !== today) fetchUsdRate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
+
+  // Wallets on-chain (Phantom/Solana por ahora): lee el saldo directo de la blockchain con
+  // la dirección pública, sin login ni API key. Solo cubre el saldo nativo en SOL — tokens
+  // SPL/meme coins sueltos no se valúan todavía (necesitaría precio por-token).
+  const syncWallet = async (idOrAcc) => {
+    const acc = typeof idOrAcc === "string" ? (state.finance.accounts || []).find((a) => a.id === idOrAcc) : idOrAcc;
+    if (!acc || !acc.address) return;
+    const id = acc.id;
+    setWalletSyncing((w) => ({ ...w, [id]: true }));
+    try {
+      const [balRes, priceRes] = await Promise.all([
+        fetch("https://solana-rpc.publicnode.com", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getBalance", params: [acc.address] }),
+        }),
+        fetch("https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd"),
+      ]);
+      const balJson = await balRes.json();
+      const priceJson = await priceRes.json();
+      const lamports = Number(balJson?.result?.value);
+      const solPrice = Number(priceJson?.solana?.usd);
+      if (!Number.isFinite(lamports) || !Number.isFinite(solPrice)) throw new Error("respuesta inválida");
+      const sol = lamports / 1e9;
+      const usd = sol * solPrice;
+      up((s) => {
+        const a = s.finance.accounts.find((x) => x.id === id);
+        if (!a) return s;
+        a.saldoSol = sol; a.saldo = usd; a.lastSynced = today;
+        a.history = a.history || {}; a.history[today] = usd;
+        return s;
+      });
+      flash(`👻 ${acc.name}: sincronizado (${sol.toFixed(3)} SOL)`);
+    } catch (e) {
+      flash(`No se pudo sincronizar ${acc.name} — revisá la dirección o probá de nuevo`);
+    }
+    setWalletSyncing((w) => { const n = { ...w }; delete n[id]; return n; });
+  };
+  useEffect(() => {
+    if (tab !== "plata") return;
+    (state.finance.accounts || [])
+      .filter((a) => a.tipo === "wallet" && a.address && a.lastSynced !== today)
+      .forEach((a) => syncWallet(a.id));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
+
+  // IOL (InvertirOnline): usuario/contraseña se piden cada vez y viven solo en memoria de
+  // React (state.finance.accounts NUNCA los guarda) — se llama directo desde el navegador
+  // a la API oficial de IOL (permite CORS), no pasa por el worker. Al terminar (éxito o
+  // error) se limpia iolCreds para no dejar la contraseña pisteada en el estado.
+  const syncIol = async (existingId) => {
+    const { name, user, pass } = iolCreds;
+    if (!user.trim() || !pass) { flash("Poné usuario y contraseña de IOL"); return; }
+    setIolLoading(true);
+    try {
+      const tokRes = await fetch("https://api.invertironline.com/token", {
+        method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: `grant_type=password&username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}`,
+      });
+      if (!tokRes.ok) throw new Error("credenciales inválidas");
+      const tokJson = await tokRes.json();
+      const accessToken = tokJson.access_token;
+      if (!accessToken) throw new Error("sin token");
+
+      const cuentaRes = await fetch("https://api.invertironline.com/api/v2/estadocuenta", {
+        headers: { authorization: "Bearer " + accessToken },
+      });
+      if (!cuentaRes.ok) throw new Error("no se pudo leer el estado de cuenta");
+      const cuentaJson = await cuentaRes.json();
+      // La API de IOL agrupa por cuenta (pesos/dólares/etc). Sumamos el total valorizado
+      // de cada una a ARS usando la cotización configurada si viene en USD.
+      const cuentas = Array.isArray(cuentaJson?.cuentas) ? cuentaJson.cuentas : [];
+      if (!cuentas.length) throw new Error("respuesta sin cuentas — revisá si cambió el formato de la API");
+      let totalArs = 0;
+      cuentas.forEach((c) => {
+        const val = Number(c.total ?? c.totalEnPesos ?? 0);
+        totalArs += /usd|dolar/i.test(c.moneda || "") ? val * usdRate : val;
+      });
+
+      const id = existingId || uid();
+      up((s) => {
+        let a = s.finance.accounts.find((x) => x.id === id);
+        if (!a) { a = { id, name: name.trim() || "IOL", tipo: "broker", broker: "iol", moneda: "ARS", saldo: 0, icon: "📈", history: {} }; s.finance.accounts.push(a); }
+        a.saldo = totalArs; a.lastSynced = today;
+        a.history = a.history || {}; a.history[today] = totalArs;
+        return s;
+      });
+      flash(`📈 IOL sincronizado: ${fmtMoney(totalArs, "ARS")}`);
+      setIolModal(null); setAddingIol(false);
+    } catch (e) {
+      flash(`No se pudo sincronizar IOL: ${e.message || "revisá tus credenciales"}`);
+    }
+    setIolCreds({ name: "IOL", user: "", pass: "" }); // se descarta siempre, haya salido bien o mal
+    setIolLoading(false);
+  };
+
+  // Tendencias de meme coins (CoinGecko, categoría "meme-token", pública y sin login):
+  // los que más subieron/bajaron en 24h. No es un feed de texto tipo X, pero cubre lo mismo
+  // que importa acá — qué se está moviendo — sin depender de una API paga.
+  const fetchTrending = async () => {
+    setTrendingLoading(true);
+    try {
+      const r = await fetch("https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&category=meme-token&order=price_change_percentage_24h_desc&per_page=8&price_change_percentage=24h");
+      const j = await r.json();
+      if (!Array.isArray(j)) throw new Error("respuesta inválida");
+      setTrending(j);
+      setTrendingUpdated(today);
+    } catch (e) {
+      flash("No se pudieron traer las tendencias cripto ahora");
+    }
+    setTrendingLoading(false);
+  };
+  useEffect(() => {
+    if (tab === "plata" && trendingUpdated !== today) fetchTrending();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
@@ -2222,7 +2383,7 @@ export default function App() {
         )}
 
         {/* Cuentas agrupadas por tipo */}
-        {["crypto", "pesos", "inversion"].map((tipoKey) => {
+        {FIN_GRUPOS.map((tipoKey) => {
           const meta = FIN_TIPOS[tipoKey];
           const accs = accounts.filter((a) => a.tipo === tipoKey);
           if (!accs.length) return null;
@@ -2254,6 +2415,7 @@ export default function App() {
                       <div style={{ textAlign: "right", flexShrink: 0 }}>
                         <div style={{ fontWeight: 900, fontSize: 17, letterSpacing: -0.4 }}>{fmtMoney(a.saldo, a.moneda)}</div>
                         {a.moneda === "USD" && <div style={{ fontSize: 11.5, color: C.sub, fontWeight: 600 }}>≈ {fmtMoney(toARS(a), "ARS")}</div>}
+                        {a.tipo === "wallet" && a.saldoSol != null && <div style={{ fontSize: 11, color: C.sub, fontWeight: 600 }}>{a.saldoSol.toFixed(3)} SOL</div>}
                       </div>
                       <button onClick={() => setEditAcc(editing ? null : a.id)}
                         style={{ width: 30, height: 26, borderRadius: 8, border: "none", cursor: "pointer", background: C.soft, color: C.sub, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
@@ -2261,7 +2423,39 @@ export default function App() {
                       </button>
                     </div>
 
-                    {!editing && (
+                    {!editing && a.tipo === "wallet" && (
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12 }}>
+                        <span style={{ fontSize: 11.5, color: C.sub, fontWeight: 600, flex: 1, fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {a.address ? `${a.address.slice(0, 4)}…${a.address.slice(-4)}` : "Sin dirección"}
+                        </span>
+                        <Btn small kind="soft" onClick={() => { if (!walletSyncing[a.id]) syncWallet(a.id); }}
+                          style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <RefreshCw size={13} style={walletSyncing[a.id] ? { animation: "norteOrbSpin 0.8s linear infinite" } : undefined} /> Sincronizar
+                        </Btn>
+                      </div>
+                    )}
+
+                    {!editing && a.tipo === "broker" && iolModal !== a.id && (
+                      <div style={{ marginTop: 12 }}>
+                        <Btn small kind="soft" onClick={() => setIolModal(a.id)} style={{ display: "flex", alignItems: "center", gap: 6, width: "100%", justifyContent: "center" }}>
+                          <RefreshCw size={13} /> Sincronizar (pide usuario y clave)
+                        </Btn>
+                      </div>
+                    )}
+                    {!editing && a.tipo === "broker" && iolModal === a.id && (
+                      <div style={{ marginTop: 12 }}>
+                        <Input placeholder="Usuario IOL" value={iolCreds.user} onChange={(e) => setIolCreds({ ...iolCreds, user: e.target.value })} />
+                        <Input type="password" placeholder="Contraseña" style={{ marginTop: 8 }} value={iolCreds.pass}
+                          onChange={(e) => setIolCreds({ ...iolCreds, pass: e.target.value })}
+                          onKeyDown={(e) => e.key === "Enter" && syncIol(a.id)} />
+                        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                          <Btn kind="ghost" small style={{ flex: 1 }} onClick={() => { setIolModal(null); setIolCreds({ name: "IOL", user: "", pass: "" }); }}>Cancelar</Btn>
+                          <Btn small style={{ flex: 1 }} onClick={() => syncIol(a.id)}>{iolLoading ? "Conectando…" : "Sincronizar"}</Btn>
+                        </div>
+                      </div>
+                    )}
+
+                    {!editing && a.tipo !== "wallet" && a.tipo !== "broker" && (
                       <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
                         <Input placeholder={`Nuevo saldo (${a.moneda})`} inputMode="decimal"
                           value={saldoDraft[a.id] || ""}
@@ -2275,12 +2469,22 @@ export default function App() {
                       <div style={{ marginTop: 12 }}>
                         <div style={lblStyle}>NOMBRE</div>
                         <Input value={a.name} onChange={(e) => up((s) => { s.finance.accounts.find((x) => x.id === a.id).name = e.target.value; return s; })} />
-                        <div style={{ ...lblStyle, marginTop: 10 }}>TIPO</div>
-                        <Segmented options={[["crypto", "Crypto"], ["pesos", "Pesos"], ["inversion", "Inversión"]]}
-                          value={a.tipo} onChange={(v) => up((s) => { s.finance.accounts.find((x) => x.id === a.id).tipo = v; return s; })} />
-                        <div style={{ ...lblStyle, marginTop: 10 }}>MONEDA</div>
-                        <Segmented options={[["ARS", "Pesos ($)"], ["USD", "Dólares (US$)"]]}
-                          value={a.moneda} onChange={(v) => up((s) => { s.finance.accounts.find((x) => x.id === a.id).moneda = v; return s; })} />
+                        {a.tipo === "wallet" ? (
+                          <>
+                            <div style={{ ...lblStyle, marginTop: 10 }}>DIRECCIÓN (SOLANA)</div>
+                            <Input value={a.address || ""} placeholder="Ej: 9WzD…AWWM"
+                              onChange={(e) => up((s) => { s.finance.accounts.find((x) => x.id === a.id).address = e.target.value.trim(); return s; })} />
+                          </>
+                        ) : (
+                          <>
+                            <div style={{ ...lblStyle, marginTop: 10 }}>TIPO</div>
+                            <Segmented options={[["crypto", "Crypto"], ["pesos", "Pesos"], ["inversion", "Inversión"]]}
+                              value={a.tipo} onChange={(v) => up((s) => { s.finance.accounts.find((x) => x.id === a.id).tipo = v; return s; })} />
+                            <div style={{ ...lblStyle, marginTop: 10 }}>MONEDA</div>
+                            <Segmented options={[["ARS", "Pesos ($)"], ["USD", "Dólares (US$)"]]}
+                              value={a.moneda} onChange={(v) => up((s) => { s.finance.accounts.find((x) => x.id === a.id).moneda = v; return s; })} />
+                          </>
+                        )}
                         <div style={{ ...lblStyle, marginTop: 10 }}>ÍCONO</div>
                         <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                           {FIN_EMOJIS.map((em) => (
@@ -2329,11 +2533,85 @@ export default function App() {
               }}>Crear cuenta</Btn>
             </div>
           </Card>
+        ) : addingWallet ? (
+          <Card>
+            <div style={lblStyle}>NOMBRE</div>
+            <Input placeholder="Ej: Phantom, Axiom…" value={newWallet.name} onChange={(e) => setNewWallet({ ...newWallet, name: e.target.value })} />
+            <div style={{ ...lblStyle, marginTop: 10 }}>DIRECCIÓN PÚBLICA (SOLANA)</div>
+            <Input placeholder="Ej: 9WzD…AWWM" value={newWallet.address} onChange={(e) => setNewWallet({ ...newWallet, address: e.target.value.trim() })} />
+            <div style={{ fontSize: 11.5, color: C.sub, fontWeight: 600, marginTop: 6, lineHeight: 1.4 }}>
+              Solo la dirección pública — nunca pidas ni pegues acá tu frase semilla (seed phrase) o clave privada.
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+              <Btn kind="ghost" onClick={() => { setAddingWallet(false); setNewWallet({ name: "Phantom", address: "", icon: "👻" }); }} style={{ flex: 1 }}>Cancelar</Btn>
+              <Btn style={{ flex: 1 }} onClick={() => {
+                if (!newWallet.name.trim()) { flash("Poné un nombre"); return; }
+                if (!newWallet.address.trim()) { flash("Poné la dirección pública"); return; }
+                const nuevaAcc = { id: uid(), name: newWallet.name.trim(), tipo: "wallet", chain: "solana", address: newWallet.address.trim(), moneda: "USD", saldo: 0, icon: newWallet.icon, history: {} };
+                up((s) => { s.finance.accounts.push(nuevaAcc); return s; });
+                setAddingWallet(false); setNewWallet({ name: "Phantom", address: "", icon: "👻" });
+                flash("Wallet agregada — sincronizando…");
+                syncWallet(nuevaAcc);
+              }}>Conectar</Btn>
+            </div>
+          </Card>
+        ) : addingIol ? (
+          <Card>
+            <div style={lblStyle}>USUARIO IOL</div>
+            <Input placeholder="Tu usuario de InvertirOnline" value={iolCreds.user} onChange={(e) => setIolCreds({ ...iolCreds, user: e.target.value })} />
+            <div style={{ ...lblStyle, marginTop: 10 }}>CONTRASEÑA</div>
+            <Input type="password" placeholder="Contraseña" value={iolCreds.pass}
+              onChange={(e) => setIolCreds({ ...iolCreds, pass: e.target.value })}
+              onKeyDown={(e) => e.key === "Enter" && syncIol()} />
+            <div style={{ fontSize: 11.5, color: C.sub, fontWeight: 600, marginTop: 6, lineHeight: 1.4 }}>
+              No se guardan — se usan una vez para pedir un token a la API oficial de IOL y se descartan.
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+              <Btn kind="ghost" onClick={() => { setAddingIol(false); setIolCreds({ name: "IOL", user: "", pass: "" }); }} style={{ flex: 1 }}>Cancelar</Btn>
+              <Btn style={{ flex: 1 }} onClick={() => syncIol()}>{iolLoading ? "Conectando…" : "Conectar"}</Btn>
+            </div>
+          </Card>
         ) : (
-          <Btn kind="soft" onClick={() => setAddingAcc(true)} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
-            <Plus size={17} /> Nueva wallet o cuenta
-          </Btn>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <Btn kind="soft" onClick={() => setAddingWallet(true)} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+              <Ghost size={17} /> Conectar wallet Solana (Phantom)
+            </Btn>
+            <Btn kind="soft" onClick={() => setAddingIol(true)} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+              <Building2 size={17} /> Conectar broker (IOL)
+            </Btn>
+            <Btn kind="soft" onClick={() => setAddingAcc(true)} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+              <Plus size={17} /> Cuenta manual (banco, otras billeteras, etc.)
+            </Btn>
+          </div>
         )}
+
+        {/* Tendencias de meme coins (CoinGecko, pública y sin login) */}
+        <SectionTitle>Tendencias cripto (24h)</SectionTitle>
+        <Card>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: trending.length ? 10 : 0 }}>
+            <Flame size={15} color={C.amber} />
+            <span style={{ fontSize: 12, color: C.sub, fontWeight: 600, flex: 1 }}>Meme coins que más se movieron</span>
+            <button onClick={fetchTrending} aria-label="Actualizar tendencias" style={{ border: "none", background: "transparent", cursor: "pointer", color: C.sub, display: "flex" }}>
+              <RefreshCw size={13} style={trendingLoading ? { animation: "norteOrbSpin 0.8s linear infinite" } : undefined} />
+            </button>
+          </div>
+          {!trending.length && !trendingLoading && <Empty text="Sin datos todavía" />}
+          {trending.map((c) => (
+            <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0", borderTop: `1px solid ${C.line}` }}>
+              <img src={c.image} alt="" width={22} height={22} style={{ borderRadius: 999, flexShrink: 0 }} onError={(e) => { e.currentTarget.style.visibility = "hidden"; }} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 800, fontSize: 13.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.name}</div>
+                <div style={{ fontSize: 11, color: C.sub, fontWeight: 600, textTransform: "uppercase" }}>{c.symbol}</div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <div style={{ fontWeight: 800, fontSize: 13 }}>US$ {Number(c.current_price).toLocaleString("es-AR", { maximumFractionDigits: 6 })}</div>
+                <div style={{ fontSize: 12, fontWeight: 800, color: (c.price_change_percentage_24h || 0) >= 0 ? "#2e9e4f" : C.red }}>
+                  {(c.price_change_percentage_24h || 0) >= 0 ? "+" : ""}{Number(c.price_change_percentage_24h || 0).toFixed(1)}%
+                </div>
+              </div>
+            </div>
+          ))}
+        </Card>
 
         <div style={{ fontSize: 12, color: C.sub, fontWeight: 600, textAlign: "center", margin: "16px 8px 4px", lineHeight: 1.5 }}>
           {pushCfg.url && pushCfg.token
@@ -3831,6 +4109,15 @@ export default function App() {
 
         <SectionTitle>Datos</SectionTitle>
         <Card>
+          <div style={{ fontSize: 12.5, color: C.sub, fontWeight: 600, marginBottom: 10, lineHeight: 1.4 }}>
+            Todo vive en este teléfono — si borrás datos de Safari o reinstalás, se pierde. Guardá un backup de vez en cuando.
+          </div>
+          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+            <Btn kind="soft" small style={{ flex: 1 }} onClick={exportData}>Exportar backup</Btn>
+            <Btn kind="soft" small style={{ flex: 1 }} onClick={() => importFileRef.current?.click()}>Importar backup</Btn>
+            <input ref={importFileRef} type="file" accept="application/json" style={{ display: "none" }}
+              onChange={(e) => { const f = e.target.files[0]; if (f) importData(f); e.target.value = ""; }} />
+          </div>
           {confirmReset ? (
             <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}>
               <span style={{ fontSize: 14, fontWeight: 600 }}>¿Seguro? Se borra todo.</span>
