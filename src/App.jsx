@@ -4,7 +4,7 @@ import {
   TrendingUp, Apple, Sprout, Lock, Unlock, Bell, Lightbulb, Smartphone, X, Calendar,
   Upload, Award, PersonStanding, Check as CheckIcon, Video, Pencil, AlertTriangle, ScanFace,
   Bot, Send, Pause, Play, Clock, Menu, Mic, Volume2, VolumeX,
-  Wallet, Coins, Landmark, DollarSign, LineChart, Plus,
+  Wallet, Coins, Landmark, DollarSign, LineChart, Plus, RefreshCw,
 } from "lucide-react";
 import { buildDefaultProgram } from "./defaultProgram";
 
@@ -1106,6 +1106,7 @@ export default function App() {
   const [newAcc, setNewAcc] = useState({ name: "", tipo: "pesos", moneda: "ARS", icon: "💰" });
   const [editRate, setEditRate] = useState(false);
   const [rateDraft, setRateDraft] = useState("");
+  const [rateLoading, setRateLoading] = useState(false);
   const [showCalc, setShowCalc] = useState(false);
   const [showChat, setShowChat] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -1320,6 +1321,28 @@ export default function App() {
     setSaldoDraft((d) => { const n = { ...d }; delete n[id]; return n; });
     flash("💰 Saldo actualizado");
   };
+
+  // Cotización del dólar blue vía dolarapi.com (pública, sin auth). Si falla (sin internet,
+  // API caída) no rompe nada: el usuario puede seguir editando la cotización a mano.
+  const fetchUsdRate = async () => {
+    setRateLoading(true);
+    try {
+      const r = await fetch("https://dolarapi.com/v1/dolares/blue");
+      const j = await r.json();
+      const venta = Number(j && j.venta);
+      if (!Number.isFinite(venta) || venta <= 0) throw new Error("respuesta inválida");
+      up((s) => { s.finance.usdRate = venta; s.finance.rateUpdated = today; return s; });
+      flash("💵 Cotización actualizada (dólar blue)");
+    } catch (e) {
+      flash("No se pudo traer la cotización — revisá tu conexión o editala a mano");
+    }
+    setRateLoading(false);
+  };
+  // Al entrar a "Plata" refresca sola una vez por día (no pega a la API en cada render).
+  useEffect(() => {
+    if (tab === "plata" && state.finance?.rateUpdated !== today) fetchUsdRate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
 
   /* ---------- Notificaciones push (worker/ en Cloudflare) ---------- */
   const cutActive = !!state.cut;
@@ -2126,12 +2149,20 @@ export default function App() {
     );
 
     const rate = (
-      <button onClick={() => { setEditRate(true); setRateDraft(String(usdRate)); }} style={{
-        border: "none", background: "transparent", cursor: "pointer", fontFamily: FONT,
-        color: "rgba(255,255,255,0.9)", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", gap: 4,
-      }}>
-        <DollarSign size={13} /> 1 USD = ${usdRate.toLocaleString("es-AR")} <Pencil size={11} />
-      </button>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <button onClick={() => { setEditRate(true); setRateDraft(String(usdRate)); }} style={{
+          border: "none", background: "transparent", cursor: "pointer", fontFamily: FONT,
+          color: "rgba(255,255,255,0.9)", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", gap: 4,
+        }}>
+          <DollarSign size={13} /> 1 USD = ${usdRate.toLocaleString("es-AR")} <Pencil size={11} />
+        </button>
+        <button onClick={fetchUsdRate} disabled={rateLoading} aria-label="Actualizar cotización" title="Traer cotización del dólar blue" style={{
+          border: "none", background: "transparent", cursor: rateLoading ? "default" : "pointer",
+          color: "rgba(255,255,255,0.85)", display: "flex", alignItems: "center", padding: 2,
+        }}>
+          <RefreshCw size={13} style={rateLoading ? { animation: "norteOrbSpin 0.8s linear infinite" } : undefined} />
+        </button>
+      </div>
     );
 
     return (
