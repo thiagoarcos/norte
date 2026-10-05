@@ -5,6 +5,7 @@ import {
   Upload, Award, PersonStanding, Check as CheckIcon, Video, Pencil, AlertTriangle, ScanFace,
   Bot, Send, Pause, Play, Clock, Menu, Mic, Volume2, VolumeX,
   Wallet, Coins, Landmark, DollarSign, LineChart, Plus, RefreshCw, Ghost, Building2,
+  ChevronLeft, ChevronRight, Trash2, Home,
 } from "lucide-react";
 import { buildDefaultProgram } from "./defaultProgram";
 
@@ -557,9 +558,55 @@ const initialState = {
       { id: "acc-naranjax", name: "Naranja X", tipo: "pesos", moneda: "ARS", saldo: 0, icon: "🍊", history: {} },
       { id: "acc-iol", name: "InvertirOnline", tipo: "inversion", moneda: "ARS", saldo: 0, icon: "📈", history: {} },
     ],
+    // Pasivos: deudas en ARS (tarjeta, préstamos…). Restan del patrimonio neto.
+    debts: [],
+    // Presupuesto mensual (en ARS). tipo = "fijo" | "variable". Arranca con lo estimado para Bariloche compartiendo depto.
+    budget: [
+      { id: "bud-alquiler", name: "Alquiler", tipo: "fijo", monto: 450000, icon: "🏠" },
+      { id: "bud-servicios", name: "Servicios", tipo: "fijo", monto: 100000, icon: "💡" },
+      { id: "bud-comida", name: "Comida", tipo: "variable", monto: 380000, icon: "🛒" },
+      { id: "bud-transporte", name: "Transporte", tipo: "variable", monto: 60000, icon: "🚌" },
+      { id: "bud-varios", name: "Varios y salud", tipo: "variable", monto: 150000, icon: "💊" },
+      { id: "bud-ocio", name: "Ocio", tipo: "variable", monto: 120000, icon: "🎉" },
+    ],
+    // Movimientos del día a día: { id, fecha "YYYY-MM-DD", tipo "ingreso"|"egreso", cat, clase "fijo"|"variable" (egresos), monto, nota }
+    movs: [],
+    // Meta de ahorro: el progreso es el patrimonio neto (cuentas − pasivos)
+    plan: {
+      nombre: "Mudanza a Bariloche",
+      fecha: "2027-03-02",
+      ahorroMensual: 2000000,
+      items: [
+        { id: "meta-entrada", name: "Entrar al depto (adelanto, depósito, comisión, garantía)", monto: 1700000 },
+        { id: "meta-equipo", name: "Equipamiento y mudanza", monto: 1000000 },
+        { id: "meta-fondo", name: "Fondo de emergencia (3 meses)", monto: 3700000 },
+      ],
+    },
   },
   push: { url: RELAY_URL, token: RELAY_TOKEN, enabled: false },
   agendaAlerts: { on: true, lead: 15 }, // avisar `lead` minutos antes de cada bloque
+  // Materias: estado = "previa" | "cursando" | "aprobada"; examen = "YYYY-MM-DD" o ""; temas = checklist de unidades
+  subjects: [
+    {
+      id: "sub-geo2", name: "Geografía", curso: "2° año", estado: "previa", examen: "2026-10-26", // mesa entre el 25 y el 30/10: se planifica para el primer día hábil
+      // Programa 2022 (prof. Eliana Paz). Libro: "Geografía, Sociedades y Espacios en América y en la Argentina", Santillana 2015.
+      temas: [
+        "U1 · América: ubicación, límites y divisiones (estructural y socio-cultural)",
+        "U1 · Conformación de los territorios: pueblos originarios, coloniales y estatales",
+        "U1 · Argentina: ubicación en el mundo, límites, formación del Estado y poblamiento",
+        "U1 · Condiciones naturales: relieve, clima, hidrografía y biomas",
+        "U2 · Recursos naturales: clasificación, renovables/no renovables, potenciales",
+        "U2 · Manejo de recursos: extractivismo, sustentabilidad y cuidado",
+        "U2 · Recursos minerales en América Latina, Anglosajona y Argentina",
+        "U2 · Agua, suelo y biodiversidad en América y Argentina",
+        "U3 · Población: crecimiento e indicadores (natalidad, mortalidad, esperanza de vida)",
+        "U3 · Distribución, densidad y migraciones en el continente",
+        "U3 · Actividades económicas: clasificación, agropecuarias y extractivas",
+        "U3 · Industria, comercio y servicios (estudio de casos)",
+        "U4 · Problemas ambientales",
+      ].map((text, i) => ({ id: `geo2-t${i + 1}`, text, done: false })),
+    },
+  ],
   scheduleSeedV: 2, // subir cuando cambie el cronograma "de fábrica" para forzar la actualización
   // Cronograma: who = "yo" | "novia"; day 0=Dom..6=Sáb; end vacío = aviso puntual
   schedule: [
@@ -599,6 +646,23 @@ async function loadState() {
   }
   return null;
 }
+
+/* Parsea montos escritos a mano al estilo argentino ("1.700.000", "2500,50"). NaN si no es un número. */
+function parseMoney(valor) {
+  return Number(String(valor).replace(/[^\d.,-]/g, "").replace(/\./g, "").replace(",", "."));
+}
+
+const INGRESO_CATS = ["Sueldo", "Changa", "Venta", "Regalo", "Otro"];
+const ymLabel = (ym) => {
+  const [y, m] = ym.split("-").map(Number);
+  const t = new Date(y, m - 1, 1).toLocaleDateString("es-AR", { month: "long", year: "numeric" });
+  return t.charAt(0).toUpperCase() + t.slice(1);
+};
+const shiftYm = (ym, d) => {
+  const [y, m] = ym.split("-").map(Number);
+  const nd = new Date(y, m - 1 + d, 1);
+  return `${nd.getFullYear()}-${String(nd.getMonth() + 1).padStart(2, "0")}`;
+};
 
 /* Formato de plata: USD con hasta 2 decimales, ARS redondeado. */
 function fmtMoney(n, moneda) {
@@ -1114,6 +1178,16 @@ export default function App() {
   const [trendingLoading, setTrendingLoading] = useState(false);
   const [trendingUpdated, setTrendingUpdated] = useState(null);
   const [addingIol, setAddingIol] = useState(false);
+  const [finView, setFinView] = useState("patrimonio"); // patrimonio | mes | meta
+  const [agendaView, setAgendaView] = useState("cronograma"); // cronograma | materias
+  const [editSubject, setEditSubject] = useState(null);       // id de materia con el panel de edición abierto
+  const [temaDraft, setTemaDraft] = useState({});             // { [subjectId]: texto } del input "nuevo tema"
+  const [newSubject, setNewSubject] = useState(null);         // borrador de materia nueva (null = cerrado)
+  const [finMonth, setFinMonth] = useState(() => dstr().slice(0, 7));
+  const [movDraft, setMovDraft] = useState({ tipo: "egreso", monto: "", cat: "", nota: "", fecha: "" });
+  const [budgetEdit, setBudgetEdit] = useState(false);
+  const [planEdit, setPlanEdit] = useState(false);
+  const [debtDraft, setDebtDraft] = useState({ name: "", monto: "" });
   const [iolModal, setIolModal] = useState(null);   // id de cuenta IOL pidiendo credenciales para (re)sincronizar
   const [iolCreds, setIolCreds] = useState({ name: "IOL", user: "", pass: "" }); // nunca se persiste — solo en memoria de la sesión
   const [iolLoading, setIolLoading] = useState(false);
@@ -1352,9 +1426,48 @@ export default function App() {
     return totalARS - base;
   })();
 
+  // Pasivos y patrimonio neto (lo que tenés menos lo que debés)
+  const debts = fin.debts || [];
+  const totalDebt = debts.reduce((sum, d) => sum + (Number(d.monto) || 0), 0);
+  const netARS = totalARS - totalDebt;
+
+  // Presupuesto (costos fijos/variables) y movimientos (ingresos/egresos), todo en ARS
+  const budget = fin.budget || [];
+  const movs = fin.movs || [];
+  const monthSummary = (ym) => {
+    const ms = movs.filter((m) => (m.fecha || "").startsWith(ym));
+    const sum = (arr) => arr.reduce((acc, m) => acc + (Number(m.monto) || 0), 0);
+    const egr = ms.filter((m) => m.tipo === "egreso");
+    const ingresos = sum(ms.filter((m) => m.tipo === "ingreso"));
+    const egresos = sum(egr);
+    return {
+      ms, ingresos, egresos, ahorro: ingresos - egresos,
+      fijos: sum(egr.filter((m) => m.clase === "fijo")),
+      variables: sum(egr.filter((m) => m.clase !== "fijo")),
+      porCat: egr.reduce((acc, m) => { acc[m.cat] = (acc[m.cat] || 0) + (Number(m.monto) || 0); return acc; }, {}),
+    };
+  };
+  const curMonth = today.slice(0, 7);
+
+  // Meta de ahorro (ej: mudanza). El progreso es el patrimonio neto.
+  const plan = fin.plan || initialState.finance.plan;
+  const planMeta = (plan.items || []).reduce((sum, i) => sum + (Number(i.monto) || 0), 0);
+  const planDias = Math.ceil((new Date(plan.fecha + "T00:00:00") - new Date(today + "T00:00:00")) / 86400000);
+  const planMeses = planDias > 0 ? Math.max(1, Math.round(planDias / 30.44)) : 0;
+  const planFalta = Math.max(0, planMeta - netARS);
+  const planPorMes = planMeses ? planFalta / planMeses : planFalta;
+
+  /* ---------- Materias: previas y exámenes ---------- */
+  const subjects = state.subjects || [];
+  const daysUntil = (fecha) => Math.ceil((new Date(fecha + "T00:00:00") - new Date(today + "T00:00:00")) / 86400000);
+  // Exámenes que vienen (de hoy en adelante), el más cercano primero; se muestran en Hoy
+  const upcomingExams = subjects
+    .filter((m) => m.estado !== "aprobada" && m.examen && daysUntil(m.examen) >= 0)
+    .sort((a, b) => a.examen.localeCompare(b.examen));
+
   // Registrar un nuevo saldo para una cuenta (guarda snapshot del día)
   const setSaldo = (id, valor) => {
-    const v = Number(String(valor).replace(/[^\d.,-]/g, "").replace(/\./g, "").replace(",", "."));
+    const v = parseMoney(valor);
     if (!Number.isFinite(v)) { flash("Poné un número válido"); return; }
     up((s) => {
       const a = s.finance.accounts.find((x) => x.id === id);
@@ -1923,6 +2036,11 @@ export default function App() {
         agua: { hoy: water, meta: state.goals.water },
         nutricion: { kcal, kcalMeta: state.goals.kcal, proteina: prot, proteinaMeta: state.goals.protein, carbs, grasa: fat, comidas: mealsToday.length },
         habitos: habitsToday.map((h) => ({ nombre: h.name, hecho: !!h.history[today] })),
+        materias: subjects.map((m) => ({
+          nombre: `${m.name}${m.curso ? ` (${m.curso})` : ""}`, estado: m.estado, examen: m.examen || null,
+          diasParaExamen: m.examen ? daysUntil(m.examen) : null,
+          temas: `${(m.temas || []).filter((t) => t.done).length}/${(m.temas || []).length}`,
+        })),
         peso: bodyWeight || null,
         cut: cut ? { activo: true, bf: cutBf, fase: cutPhase?.name, objetivo: cutPhase?.target, misiones: `${cutMissionsDone}/${cutMissions.length}` } : { activo: false },
         finanzas: {
@@ -1932,6 +2050,10 @@ export default function App() {
           variacion30dARS: finTrend != null ? Math.round(finTrend) : null,
           porTipo: finByTipo.map((g) => ({ tipo: g.tipo, ars: Math.round(g.totalARS) })),
           cuentas: accounts.map((a) => ({ nombre: a.name, tipo: a.tipo, moneda: a.moneda, saldo: Number(a.saldo) || 0, ars: Math.round(toARS(a)) })),
+          pasivosARS: Math.round(totalDebt),
+          patrimonioNetoARS: Math.round(netARS),
+          mes: (() => { const m = monthSummary(curMonth); return { ingresos: m.ingresos, egresos: m.egresos, fijos: m.fijos, variables: m.variables, ahorro: m.ahorro }; })(),
+          meta: { nombre: plan.nombre, fecha: plan.fecha, objetivoARS: planMeta, faltaARS: Math.round(planFalta), ahorroPorMesNecesario: Math.round(planPorMes) },
         },
       };
       pushCall("/agenda/push", { schedule: state.schedule || [], snapshot });
@@ -2232,6 +2354,24 @@ export default function App() {
           </>
         )}
 
+        {upcomingExams.length > 0 && (
+          <>
+            <SectionTitle right={<Btn kind="ghost" small onClick={() => { setAgendaView("materias"); setTab("agenda"); }}>Ver materias →</Btn>}>Exámenes</SectionTitle>
+            <Card style={{ padding: 8 }}>
+              {upcomingExams.slice(0, 3).map((m) => {
+                const d = daysUntil(m.examen);
+                const temas = m.temas || [];
+                const hechos = temas.filter((t) => t.done).length;
+                return (
+                  <Row key={m.id} title={`${m.estado === "previa" ? "📕" : "📘"} ${m.name}${m.curso ? ` · ${m.curso}` : ""}`}
+                    sub={`${m.estado === "previa" ? "Previa · " : ""}${temas.length ? `${hechos}/${temas.length} temas` : "Cargá los temas"}`}
+                    right={<span style={{ fontWeight: 900, fontSize: 13.5, whiteSpace: "nowrap", color: d <= 7 ? C.red : d <= 14 ? C.amber : C.ink }}>{d === 0 ? "¡Hoy!" : d === 1 ? "Mañana" : `${d} días`}</span>} />
+                );
+              })}
+            </Card>
+          </>
+        )}
+
         <SectionTitle right={<Btn kind="ghost" small onClick={() => setTab("dieta")}>Registrar →</Btn>}>Dieta de hoy</SectionTitle>
         <Card style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
           <MacroBox label="Calorías" value={kcal} goal={state.goals.kcal} unit="kcal" color={C.amber} />
@@ -2326,9 +2466,306 @@ export default function App() {
       </div>
     );
 
+    const finNav = (
+      <>
+        <PageHeader title="Plata" subtitle={{ patrimonio: "Patrimonio", mes: "Ingresos y gastos", meta: "Meta de ahorro" }[finView]} />
+        <div style={{ marginBottom: 14 }}>
+          <Segmented options={[["patrimonio", "Patrimonio"], ["mes", "Mes"], ["meta", "Meta"]]} value={finView} onChange={setFinView} />
+        </div>
+      </>
+    );
+    if (finView === "mes") return FinMes();
+    if (finView === "meta") return FinMeta();
+
+    function FinMes() {
+      const sm = monthSummary(finMonth);
+      const isIngreso = movDraft.tipo === "ingreso";
+      const cats = isIngreso ? INGRESO_CATS : [...budget.map((b) => b.name), "Otro"];
+      const budFijos = budget.filter((b) => b.tipo === "fijo").reduce((acc, b) => acc + (Number(b.monto) || 0), 0);
+      const budVar = budget.filter((b) => b.tipo !== "fijo").reduce((acc, b) => acc + (Number(b.monto) || 0), 0);
+      const defaultFecha = finMonth === curMonth ? today : `${finMonth}-01`;
+      const addMov = () => {
+        const v = parseMoney(movDraft.monto);
+        if (!Number.isFinite(v) || v <= 0) { flash("Poné un monto válido"); return; }
+        const cat = movDraft.cat || (isIngreso ? "Sueldo" : "Otro");
+        const bud = budget.find((b) => b.name === cat);
+        up((s) => {
+          s.finance.movs = s.finance.movs || [];
+          s.finance.movs.push({
+            id: uid(), fecha: movDraft.fecha || defaultFecha, tipo: movDraft.tipo, cat, monto: v, nota: movDraft.nota.trim(),
+            ...(isIngreso ? {} : { clase: bud?.tipo === "fijo" ? "fijo" : "variable" }),
+          });
+          return s;
+        });
+        setMovDraft({ ...movDraft, monto: "", nota: "", fecha: "" });
+        flash(isIngreso ? "💵 Ingreso registrado" : "🧾 Gasto registrado");
+      };
+      const chip = (active) => ({
+        fontSize: 12.5, fontWeight: 700, padding: "6px 11px", borderRadius: 999, cursor: "pointer", border: "none", fontFamily: FONT,
+        background: active ? C.primarySoft : C.soft, color: active ? (C.theme === "dark" ? C.primaryInk : C.primary) : C.sub,
+      });
+      const iconBtn = { width: 30, height: 26, borderRadius: 8, border: "none", cursor: "pointer", background: C.soft, color: C.sub, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 };
+      return (
+        <>
+          {finNav}
+
+          {/* Selector de mes */}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+            <button onClick={() => setFinMonth(shiftYm(finMonth, -1))} aria-label="Mes anterior" style={iconBtn}><ChevronLeft size={16} /></button>
+            <div style={{ fontWeight: 800, fontSize: 16 }}>{ymLabel(finMonth)}</div>
+            <button onClick={() => setFinMonth(shiftYm(finMonth, 1))} aria-label="Mes siguiente" style={iconBtn}><ChevronRight size={16} /></button>
+          </div>
+
+          {/* Resumen del mes */}
+          <div style={{
+            borderRadius: 22, padding: 20, color: "#fff",
+            background: `linear-gradient(135deg, ${C.primary}, ${C.accent})`,
+            boxShadow: `0 10px 30px ${C.primaryGlow}`,
+          }}>
+            <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", opacity: 0.85 }}>Ahorro del mes</div>
+            <div style={{ fontSize: 32, fontWeight: 900, letterSpacing: -1, marginTop: 4 }}>{sm.ahorro < 0 ? "−" : ""}{fmtMoney(Math.abs(sm.ahorro), "ARS")}</div>
+            <div style={{ display: "flex", gap: 10, marginTop: 14, paddingTop: 12, borderTop: "1px solid rgba(255,255,255,0.22)" }}>
+              {[["Ingresos", sm.ingresos], ["Fijos", sm.fijos], ["Variables", sm.variables]].map(([lbl, v]) => (
+                <div key={lbl} style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, opacity: 0.85, textTransform: "uppercase", letterSpacing: 0.5 }}>{lbl}</div>
+                  <div style={{ fontSize: 14, fontWeight: 800, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{fmtMoney(v, "ARS")}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+          {plan.ahorroMensual > 0 && sm.ingresos > 0 && (
+            <div style={{ fontSize: 12.5, color: sm.ahorro >= plan.ahorroMensual ? "#2e9e4f" : C.sub, fontWeight: 700, textAlign: "center", marginTop: 8 }}>
+              {sm.ahorro >= plan.ahorroMensual
+                ? `✅ Llegaste a tu objetivo de ahorro (${fmtMoney(plan.ahorroMensual, "ARS")})`
+                : `Te faltan ${fmtMoney(plan.ahorroMensual - sm.ahorro, "ARS")} para tu objetivo de ahorro del mes`}
+            </div>
+          )}
+
+          {/* Cargar movimiento */}
+          <SectionTitle>Registrar</SectionTitle>
+          <Card>
+            <Segmented options={[["egreso", "Gasto"], ["ingreso", "Ingreso"]]} value={movDraft.tipo}
+              onChange={(v) => setMovDraft({ ...movDraft, tipo: v, cat: "" })} />
+            <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+              <Input placeholder="Monto ($)" inputMode="decimal" value={movDraft.monto}
+                onChange={(e) => setMovDraft({ ...movDraft, monto: e.target.value })}
+                onKeyDown={(e) => e.key === "Enter" && addMov()} />
+              <Input type="date" value={movDraft.fecha || defaultFecha}
+                onChange={(e) => setMovDraft({ ...movDraft, fecha: e.target.value })} style={{ width: 150, flexShrink: 0 }} />
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10 }}>
+              {cats.map((c) => {
+                const active = (movDraft.cat || (isIngreso ? "Sueldo" : "Otro")) === c;
+                const bud = budget.find((b) => b.name === c);
+                return <button key={c} onClick={() => setMovDraft({ ...movDraft, cat: c })} style={chip(active)}>{bud?.icon ? `${bud.icon} ` : ""}{c}</button>;
+              })}
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+              <Input placeholder="Nota (opcional)" value={movDraft.nota}
+                onChange={(e) => setMovDraft({ ...movDraft, nota: e.target.value })}
+                onKeyDown={(e) => e.key === "Enter" && addMov()} />
+              <Btn onClick={addMov}>Agregar</Btn>
+            </div>
+          </Card>
+
+          {/* Presupuesto vs real */}
+          <SectionTitle right={<Btn kind="ghost" small onClick={() => setBudgetEdit(!budgetEdit)}>{budgetEdit ? "Listo" : "Editar"}</Btn>}>Presupuesto</SectionTitle>
+          <Card>
+            {["fijo", "variable"].map((t) => (
+              <div key={t} style={{ marginBottom: t === "fijo" ? 14 : 0 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, fontWeight: 800, color: C.sub, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>
+                  <span>Costos {t === "fijo" ? "fijos" : "variables"}</span>
+                  <span>{fmtMoney(t === "fijo" ? sm.fijos : sm.variables, "ARS")} / {fmtMoney(t === "fijo" ? budFijos : budVar, "ARS")}</span>
+                </div>
+                {budget.filter((b) => (b.tipo === "fijo") === (t === "fijo")).map((b) => {
+                  const real = sm.porCat[b.name] || 0;
+                  const pct = b.monto ? real / b.monto : 0;
+                  return (
+                    <div key={b.id} style={{ padding: "7px 0", borderTop: `1px solid ${C.line}` }}>
+                      {budgetEdit ? (
+                        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                          <Input value={b.name} onChange={(e) => up((s) => { s.finance.budget.find((x) => x.id === b.id).name = e.target.value; return s; })} />
+                          <Input inputMode="numeric" value={String(b.monto || "")} style={{ width: 110, flexShrink: 0 }}
+                            onChange={(e) => up((s) => { const v = parseMoney(e.target.value); s.finance.budget.find((x) => x.id === b.id).monto = Number.isFinite(v) ? v : 0; return s; })} />
+                          <button title="Cambiar fijo/variable" style={{ ...iconBtn, width: 48, fontSize: 11, fontWeight: 800, fontFamily: FONT }}
+                            onClick={() => up((s) => { const x = s.finance.budget.find((y) => y.id === b.id); x.tipo = x.tipo === "fijo" ? "variable" : "fijo"; return s; })}>
+                            {b.tipo === "fijo" ? "Fijo" : "Var."}
+                          </button>
+                          <button aria-label="Borrar categoría" style={iconBtn} onClick={() => up((s) => { s.finance.budget = s.finance.budget.filter((x) => x.id !== b.id); return s; })}><Trash2 size={14} /></button>
+                        </div>
+                      ) : (
+                        <>
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 13.5, fontWeight: 700 }}>
+                            <span>{b.icon} {b.name}</span>
+                            <span style={{ color: pct > 1 ? C.red : C.ink, whiteSpace: "nowrap" }}>{fmtMoney(real, "ARS")} <span style={{ color: C.sub, fontWeight: 600 }}>/ {fmtMoney(b.monto, "ARS")}</span></span>
+                          </div>
+                          <div style={{ height: 6, borderRadius: 999, background: C.soft, marginTop: 6, overflow: "hidden" }}>
+                            <div style={{ width: `${Math.min(100, pct * 100)}%`, height: "100%", borderRadius: 999, background: pct > 1 ? C.red : pct > 0.85 ? C.amber : C.primary }} />
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+            {budgetEdit && (
+              <Btn kind="soft" small style={{ width: "100%", marginTop: 10, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}
+                onClick={() => up((s) => { s.finance.budget = s.finance.budget || []; s.finance.budget.push({ id: uid(), name: "Nueva categoría", tipo: "variable", monto: 0, icon: "🧾" }); return s; })}>
+                <Plus size={15} /> Agregar categoría
+              </Btn>
+            )}
+            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 12, paddingTop: 10, borderTop: `1px solid ${C.line}`, fontWeight: 800, fontSize: 14 }}>
+              <span>Total del mes</span>
+              <span>{fmtMoney(sm.egresos, "ARS")} / {fmtMoney(budFijos + budVar, "ARS")}</span>
+            </div>
+          </Card>
+
+          {/* Movimientos del mes */}
+          <SectionTitle>Movimientos</SectionTitle>
+          <Card>
+            {!sm.ms.length && <div style={{ fontSize: 13, color: C.sub, fontWeight: 600, textAlign: "center", padding: "8px 0" }}>Todavía no cargaste nada este mes</div>}
+            {[...sm.ms].sort((a, b) => (b.fecha || "").localeCompare(a.fecha || "")).map((m, i) => (
+              <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderTop: i ? `1px solid ${C.line}` : "none" }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 800, fontSize: 13.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {m.cat}{m.nota ? <span style={{ color: C.sub, fontWeight: 600 }}> · {m.nota}</span> : null}
+                  </div>
+                  <div style={{ fontSize: 11.5, color: C.sub, fontWeight: 600 }}>
+                    {m.fecha.slice(8, 10)}/{m.fecha.slice(5, 7)}{m.tipo === "egreso" ? ` · ${m.clase === "fijo" ? "fijo" : "variable"}` : " · ingreso"}
+                  </div>
+                </div>
+                <div style={{ fontWeight: 800, fontSize: 14, whiteSpace: "nowrap", color: m.tipo === "ingreso" ? "#2e9e4f" : C.ink }}>
+                  {m.tipo === "ingreso" ? "+" : "−"}{fmtMoney(m.monto, "ARS")}
+                </div>
+                <button aria-label="Borrar movimiento" style={iconBtn} onClick={() => up((s) => { s.finance.movs = s.finance.movs.filter((x) => x.id !== m.id); return s; })}><Trash2 size={13} /></button>
+              </div>
+            ))}
+          </Card>
+        </>
+      );
+    }
+
+    function FinMeta() {
+      const pct = planMeta ? Math.max(0, netARS) / planMeta : 0;
+      const ahorroMes = monthSummary(curMonth).ahorro;
+      // Proyección: en qué mes llegás si ahorrás lo que te propusiste por mes
+      const mesesProy = plan.ahorroMensual > 0 ? Math.ceil(planFalta / plan.ahorroMensual) : null;
+      const llegaEn = mesesProy != null ? shiftYm(curMonth, mesesProy) : null;
+      const llegaATiempo = llegaEn != null && llegaEn <= plan.fecha.slice(0, 7);
+      const setPlan = (fn) => up((s) => { s.finance.plan = s.finance.plan || structuredClone(initialState.finance.plan); fn(s.finance.plan); return s; });
+      const iconBtn = { width: 30, height: 26, borderRadius: 8, border: "none", cursor: "pointer", background: C.soft, color: C.sub, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 };
+      return (
+        <>
+          {finNav}
+
+          <div style={{
+            borderRadius: 22, padding: 20, color: "#fff",
+            background: `linear-gradient(135deg, ${C.primary}, ${C.accent})`,
+            boxShadow: `0 10px 30px ${C.primaryGlow}`,
+          }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+              <Ring pct={pct} size={92} stroke={9} color="#fff">
+                <span style={{ fontSize: 20, fontWeight: 900, color: "#fff" }}>{Math.round(Math.min(1, pct) * 100)}%</span>
+              </Ring>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", opacity: 0.85, display: "flex", alignItems: "center", gap: 5 }}><Home size={13} /> {plan.nombre}</div>
+                <div style={{ fontSize: 26, fontWeight: 900, letterSpacing: -0.8, marginTop: 4 }}>{fmtMoney(Math.max(0, netARS), "ARS")}</div>
+                <div style={{ fontSize: 13, fontWeight: 700, opacity: 0.9 }}>de {fmtMoney(planMeta, "ARS")}</div>
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 10, marginTop: 14, paddingTop: 12, borderTop: "1px solid rgba(255,255,255,0.22)" }}>
+              {[
+                ["Falta", fmtMoney(planFalta, "ARS")],
+                ["Quedan", planDias > 0 ? `${planDias} días` : "¡Llegó!"],
+                ["Por mes", planFalta > 0 ? fmtMoney(planPorMes, "ARS") : "—"],
+              ].map(([lbl, v]) => (
+                <div key={lbl} style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, opacity: 0.85, textTransform: "uppercase", letterSpacing: 0.5 }}>{lbl}</div>
+                  <div style={{ fontSize: 14, fontWeight: 800, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{v}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div style={{ fontSize: 12, color: C.sub, fontWeight: 600, textAlign: "center", margin: "8px 8px 0", lineHeight: 1.45 }}>
+            El progreso es tu patrimonio neto: cuentas de Patrimonio menos pasivos.
+          </div>
+
+          {/* Ritmo */}
+          <SectionTitle>Ritmo</SectionTitle>
+          <Card>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13.5, fontWeight: 700, padding: "4px 0" }}>
+              <span>Objetivo de ahorro mensual</span><span>{fmtMoney(plan.ahorroMensual, "ARS")}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13.5, fontWeight: 700, padding: "4px 0" }}>
+              <span>Ahorro real este mes</span>
+              <span style={{ color: ahorroMes >= plan.ahorroMensual ? "#2e9e4f" : C.ink }}>{ahorroMes < 0 ? "−" : ""}{fmtMoney(Math.abs(ahorroMes), "ARS")}</span>
+            </div>
+            {planFalta > 0 && llegaEn && (
+              <div style={{
+                marginTop: 10, padding: "10px 12px", borderRadius: 12, fontSize: 13, fontWeight: 700, lineHeight: 1.45,
+                background: llegaATiempo ? "rgba(52,199,89,0.12)" : "rgba(255,159,10,0.14)", color: llegaATiempo ? "#2e9e4f" : C.amber,
+              }}>
+                {llegaATiempo
+                  ? `A este ritmo llegás en ${ymLabel(llegaEn).toLowerCase()} ✅`
+                  : `A este ritmo llegás recién en ${ymLabel(llegaEn).toLowerCase()}. Para llegar a tiempo necesitás ${fmtMoney(planPorMes, "ARS")}/mes.`}
+              </div>
+            )}
+          </Card>
+
+          {/* Desglose de la meta */}
+          <SectionTitle right={<Btn kind="ghost" small onClick={() => setPlanEdit(!planEdit)}>{planEdit ? "Listo" : "Editar"}</Btn>}>Qué necesitás juntar</SectionTitle>
+          <Card>
+            {planEdit && (
+              <div style={{ marginBottom: 12 }}>
+                <div style={lblStyle}>NOMBRE</div>
+                <Input value={plan.nombre} onChange={(e) => setPlan((p) => { p.nombre = e.target.value; })} />
+                <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={lblStyle}>FECHA</div>
+                    <Input type="date" value={plan.fecha} onChange={(e) => e.target.value && setPlan((p) => { p.fecha = e.target.value; })} />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={lblStyle}>AHORRO / MES</div>
+                    <Input inputMode="numeric" value={String(plan.ahorroMensual || "")}
+                      onChange={(e) => setPlan((p) => { const v = parseMoney(e.target.value); p.ahorroMensual = Number.isFinite(v) ? v : 0; })} />
+                  </div>
+                </div>
+              </div>
+            )}
+            {(plan.items || []).map((it, i) => (
+              <div key={it.id} style={{ padding: "8px 0", borderTop: i || planEdit ? `1px solid ${C.line}` : "none" }}>
+                {planEdit ? (
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    <Input value={it.name} onChange={(e) => setPlan((p) => { p.items.find((x) => x.id === it.id).name = e.target.value; })} />
+                    <Input inputMode="numeric" value={String(it.monto || "")} style={{ width: 110, flexShrink: 0 }}
+                      onChange={(e) => setPlan((p) => { const v = parseMoney(e.target.value); p.items.find((x) => x.id === it.id).monto = Number.isFinite(v) ? v : 0; })} />
+                    <button aria-label="Borrar ítem" style={iconBtn} onClick={() => setPlan((p) => { p.items = p.items.filter((x) => x.id !== it.id); })}><Trash2 size={14} /></button>
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 13.5, fontWeight: 700 }}>
+                    <span>{it.name}</span><span style={{ whiteSpace: "nowrap" }}>{fmtMoney(it.monto, "ARS")}</span>
+                  </div>
+                )}
+              </div>
+            ))}
+            {planEdit && (
+              <Btn kind="soft" small style={{ width: "100%", marginTop: 8, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}
+                onClick={() => setPlan((p) => { p.items = p.items || []; p.items.push({ id: uid(), name: "Nuevo ítem", monto: 0 }); })}>
+                <Plus size={15} /> Agregar ítem
+              </Btn>
+            )}
+            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 10, paddingTop: 10, borderTop: `1px solid ${C.line}`, fontWeight: 900, fontSize: 15 }}>
+              <span>Meta total</span><span>{fmtMoney(planMeta, "ARS")}</span>
+            </div>
+          </Card>
+        </>
+      );
+    }
+
     return (
       <>
-        <PageHeader title="Plata" subtitle="Patrimonio" />
+        {finNav}
 
         {/* Hero: patrimonio total */}
         <div style={{
@@ -2503,6 +2940,33 @@ export default function App() {
             </div>
           );
         })}
+
+        {/* Pasivos (deudas) */}
+        <SectionTitle>Pasivos</SectionTitle>
+        <Card>
+          {debts.map((d, i) => (
+            <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderTop: i ? `1px solid ${C.line}` : "none" }}>
+              <span style={{ flex: 1, fontWeight: 700, fontSize: 14 }}>{d.name}</span>
+              <span style={{ fontWeight: 800, fontSize: 14, color: C.red }}>−{fmtMoney(d.monto, "ARS")}</span>
+              <button aria-label="Borrar pasivo" onClick={() => up((s) => { s.finance.debts = s.finance.debts.filter((x) => x.id !== d.id); return s; })}
+                style={{ width: 30, height: 26, borderRadius: 8, border: "none", cursor: "pointer", background: C.soft, color: C.sub, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Trash2 size={13} /></button>
+            </div>
+          ))}
+          <div style={{ display: "flex", gap: 8, marginTop: debts.length ? 10 : 0 }}>
+            <Input placeholder="Deuda (ej: tarjeta)" value={debtDraft.name} onChange={(e) => setDebtDraft({ ...debtDraft, name: e.target.value })} />
+            <Input placeholder="Monto ($)" inputMode="decimal" value={debtDraft.monto} style={{ width: 110, flexShrink: 0 }}
+              onChange={(e) => setDebtDraft({ ...debtDraft, monto: e.target.value })} />
+            <Btn onClick={() => {
+              const v = parseMoney(debtDraft.monto);
+              if (!debtDraft.name.trim() || !Number.isFinite(v) || v <= 0) { flash("Poné nombre y monto"); return; }
+              up((s) => { s.finance.debts = s.finance.debts || []; s.finance.debts.push({ id: uid(), name: debtDraft.name.trim(), monto: v }); return s; });
+              setDebtDraft({ name: "", monto: "" });
+            }}>＋</Btn>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 12, paddingTop: 10, borderTop: `1px solid ${C.line}`, fontWeight: 900, fontSize: 15 }}>
+            <span>Patrimonio neto</span><span>{fmtMoney(netARS, "ARS")}</span>
+          </div>
+        </Card>
 
         {/* Agregar cuenta */}
         <SectionTitle>Agregar</SectionTitle>
@@ -3720,9 +4184,153 @@ export default function App() {
       </div>
     );
 
+    const agendaNav = (
+      <div style={{ marginBottom: 14 }}>
+        <Segmented options={[["cronograma", "Cronograma"], ["materias", "Materias"]]} value={agendaView} onChange={setAgendaView} />
+      </div>
+    );
+    if (agendaView === "materias") return Materias();
+
+    function Materias() {
+      const ESTADOS = {
+        previa: { label: "Previa", color: C.red, bg: "rgba(255,59,48,0.12)" },
+        cursando: { label: "Cursando", color: C.primary, bg: C.primarySoft },
+        aprobada: { label: "Aprobada", color: "#2e9e4f", bg: "rgba(52,199,89,0.14)" },
+      };
+      const ORDEN = { previa: 0, cursando: 1, aprobada: 2 };
+      const lista = [...subjects].sort((a, b) =>
+        (ORDEN[a.estado] ?? 1) - (ORDEN[b.estado] ?? 1) || (a.examen || "9999").localeCompare(b.examen || "9999"));
+      const setSub = (id, fn) => up((s) => { const m = (s.subjects || []).find((x) => x.id === id); if (m) fn(m); return s; });
+      const addTema = (id) => {
+        const t = (temaDraft[id] || "").trim();
+        if (!t) return;
+        setSub(id, (m) => { m.temas = m.temas || []; m.temas.push({ id: uid(), text: t, done: false }); });
+        setTemaDraft((d) => ({ ...d, [id]: "" }));
+      };
+      const iconBtn = { width: 30, height: 26, borderRadius: 8, border: "none", cursor: "pointer", background: C.soft, color: C.sub, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 };
+      const subFields = (val, set) => (
+        <div style={{ display: "grid", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8 }}>
+            <Input placeholder="Materia (ej: Geografía)" value={val.name} onChange={(e) => set({ ...val, name: e.target.value })} />
+            <Input placeholder="Año" value={val.curso} style={{ width: 90, flexShrink: 0 }} onChange={(e) => set({ ...val, curso: e.target.value })} />
+          </div>
+          <Segmented options={[["previa", "Previa"], ["cursando", "Cursando"], ["aprobada", "Aprobada"]]} value={val.estado} onChange={(v) => set({ ...val, estado: v })} />
+          <div>
+            <div style={lblStyle}>FECHA DE EXAMEN (opcional)</div>
+            <Input type="date" value={val.examen || ""} onChange={(e) => set({ ...val, examen: e.target.value })} />
+          </div>
+        </div>
+      );
+      return (
+        <>
+          <PageHeader title="Agenda" subtitle="Materias y exámenes" />
+          {agendaNav}
+
+          {!lista.length && <Card><div style={{ fontSize: 13, color: C.sub, fontWeight: 600, textAlign: "center" }}>No cargaste materias todavía</div></Card>}
+
+          {lista.map((m) => {
+            const est = ESTADOS[m.estado] || ESTADOS.cursando;
+            const temas = m.temas || [];
+            const hechos = temas.filter((t) => t.done).length;
+            const pend = temas.length - hechos;
+            const d = m.examen ? daysUntil(m.examen) : null;
+            const editing = editSubject === m.id;
+            // Ritmo sugerido: repartir los temas pendientes en los días que quedan, dejando el último día para repasar
+            const diasEstudio = d != null ? Math.max(1, d - 1) : null;
+            const ritmo = pend > 0 && diasEstudio
+              ? (pend >= diasEstudio ? `${Math.ceil(pend / diasEstudio)} tema${Math.ceil(pend / diasEstudio) === 1 ? "" : "s"} por día` : `1 tema cada ${Math.floor(diasEstudio / pend)} días`)
+              : null;
+            return (
+              <Card key={m.id} style={{ marginTop: 10, opacity: m.estado === "aprobada" && !editing ? 0.7 : 1 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 800, fontSize: 16, letterSpacing: -0.2 }}>{m.name}{m.curso ? <span style={{ color: C.sub, fontWeight: 700, fontSize: 13.5 }}> · {m.curso}</span> : null}</div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4, flexWrap: "wrap" }}>
+                      <span style={{ fontSize: 11, fontWeight: 800, padding: "2px 8px", borderRadius: 999, background: est.bg, color: est.color, textTransform: "uppercase", letterSpacing: 0.3 }}>{est.label}</span>
+                      {m.examen && m.estado !== "aprobada" && (
+                        <span style={{ fontSize: 12.5, fontWeight: 800, color: d < 0 ? C.sub : d <= 7 ? C.red : d <= 14 ? C.amber : C.sub }}>
+                          {d < 0 ? `Fue el ${m.examen.slice(8, 10)}/${m.examen.slice(5, 7)}` : d === 0 ? "Examen ¡hoy!" : `Examen ${m.examen.slice(8, 10)}/${m.examen.slice(5, 7)} · faltan ${d} día${d === 1 ? "" : "s"}`}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <button aria-label={editing ? "Cerrar edición" : "Editar materia"} style={iconBtn} onClick={() => setEditSubject(editing ? null : m.id)}>
+                    {editing ? <X size={14} /> : <Pencil size={14} />}
+                  </button>
+                </div>
+
+                {editing ? (
+                  <div style={{ marginTop: 12 }}>
+                    {subFields(m, (v) => setSub(m.id, (x) => { x.name = v.name; x.curso = v.curso; x.estado = v.estado; x.examen = v.examen; }))}
+                    <div style={{ marginTop: 12, textAlign: "right" }}>
+                      <Btn kind="danger" small onClick={() => { setEditSubject(null); up((s) => { s.subjects = s.subjects.filter((x) => x.id !== m.id); return s; }); }}>Borrar materia</Btn>
+                    </div>
+                  </div>
+                ) : m.estado !== "aprobada" && (
+                  <>
+                    {temas.length > 0 && (
+                      <div style={{ marginTop: 12 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, fontWeight: 800, color: C.sub, marginBottom: 6 }}>
+                          <span>TEMAS · {hechos}/{temas.length}</span>
+                          {ritmo && <span style={{ color: C.primary }}>{ritmo}</span>}
+                        </div>
+                        <div style={{ height: 6, borderRadius: 999, background: C.soft, overflow: "hidden", marginBottom: 6 }}>
+                          <div style={{ width: `${(hechos / temas.length) * 100}%`, height: "100%", borderRadius: 999, background: hechos === temas.length ? "#2e9e4f" : C.primary }} />
+                        </div>
+                        {temas.map((t) => (
+                          <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 0", borderTop: `1px solid ${C.line}` }}>
+                            <Check done={t.done} onClick={() => setSub(m.id, (x) => { const tt = x.temas.find((y) => y.id === t.id); tt.done = !tt.done; })} />
+                            <span style={{ flex: 1, fontSize: 14, fontWeight: 600, color: t.done ? C.sub : C.ink, textDecoration: t.done ? "line-through" : "none" }}>{t.text}</span>
+                            <button aria-label="Borrar tema" style={iconBtn} onClick={() => setSub(m.id, (x) => { x.temas = x.temas.filter((y) => y.id !== t.id); })}><Trash2 size={13} /></button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {!temas.length && (
+                      <div style={{ fontSize: 12.5, color: C.sub, fontWeight: 600, marginTop: 10, lineHeight: 1.4 }}>
+                        Cargá las unidades o temas del programa y andá tachando a medida que los estudiás.
+                      </div>
+                    )}
+                    <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                      <Input placeholder="Nuevo tema (ej: Unidad 1 – Relieve)" value={temaDraft[m.id] || ""}
+                        onChange={(e) => setTemaDraft({ ...temaDraft, [m.id]: e.target.value })}
+                        onKeyDown={(e) => e.key === "Enter" && addTema(m.id)} />
+                      <Btn onClick={() => addTema(m.id)}>＋</Btn>
+                    </div>
+                  </>
+                )}
+              </Card>
+            );
+          })}
+
+          <SectionTitle>Agregar</SectionTitle>
+          {newSubject ? (
+            <Card>
+              {subFields(newSubject, setNewSubject)}
+              <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+                <Btn kind="ghost" style={{ flex: 1 }} onClick={() => setNewSubject(null)}>Cancelar</Btn>
+                <Btn style={{ flex: 1 }} onClick={() => {
+                  if (!newSubject.name.trim()) { flash("Poné el nombre de la materia"); return; }
+                  up((s) => { s.subjects = s.subjects || []; s.subjects.push({ ...newSubject, id: uid(), name: newSubject.name.trim(), temas: [] }); return s; });
+                  setNewSubject(null);
+                  flash("📚 Materia agregada");
+                }}>Crear materia</Btn>
+              </div>
+            </Card>
+          ) : (
+            <Btn kind="soft" onClick={() => setNewSubject({ name: "", curso: "", estado: "cursando", examen: "" })}
+              style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+              <Plus size={17} /> Agregar materia
+            </Btn>
+          )}
+        </>
+      );
+    }
+
     return (
       <>
         <PageHeader title="Agenda" subtitle="Tu cronograma y el de tu novia" />
+        {agendaNav}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, margin: "0 4px 12px", flexWrap: "wrap" }}>
           <div style={{ display: "flex", gap: 14 }}>
             {Object.values(OWNER).map((o) => (
