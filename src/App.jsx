@@ -8,6 +8,7 @@ import {
   ChevronLeft, ChevronRight, Trash2, Home,
 } from "lucide-react";
 import { buildDefaultProgram } from "./defaultProgram";
+import { BONUS_LESSONS, BONUS_START, BONUS_SUBJECT_ID, bonusDayIndex } from "./bonusGeografia";
 
 /* ============ NORTE (ex NEXO FIT) v4 ============
    Nuevo en v4: mapa muscular interactivo (frente/espalda) en Gym,
@@ -1193,6 +1194,7 @@ export default function App() {
   const [iolLoading, setIolLoading] = useState(false);
   const [showCalc, setShowCalc] = useState(false);
   const [showChat, setShowChat] = useState(false);
+  const [bonusSel, setBonusSel] = useState(null); // lección de Bonus abierta (null = la de hoy)
   const [menuOpen, setMenuOpen] = useState(false);
   const [kbInset, setKbInset] = useState(0); // alto del teclado en iOS (visualViewport)
   const swipeRef = useRef({ x: 0, y: 0 });
@@ -2350,6 +2352,20 @@ export default function App() {
                 <Row key={e.id} title={e.name} sub={`${e.sets.length} serie${e.sets.length === 1 ? "" : "s"}${e.intensity ? ` · ${e.intensity}` : ""}`}
                   right={<Check color={C.amber} done={!!wLog[e.id]} onClick={() => toggleEx(e)} />} />
               ))}
+            </Card>
+          </>
+        )}
+
+        {bonusPendHoy && (
+          <>
+            <SectionTitle>Bonus de hoy</SectionTitle>
+            <Card onClick={() => { setBonusSel(null); setTab("bonus"); }} style={{ cursor: "pointer", display: "flex", alignItems: "center", gap: 12 }}>
+              <Lightbulb size={22} color={C.amber} style={{ flexShrink: 0 }} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 800, fontSize: 15 }}>📕 Geografía · {bonusHoy.titulo}</div>
+                <div style={{ fontSize: 12.5, color: C.sub, fontWeight: 600, marginTop: 2 }}>Lectura + ejercicio · {bonusProg(bonusHoy.id).leido ? "falta el ejercicio" : "unos 20 minutos"}</div>
+              </div>
+              <ChevronRight size={18} color={C.sub} />
             </Card>
           </>
         )}
@@ -4132,6 +4148,123 @@ export default function App() {
   const [newEvt, setNewEvt] = useState({ who: "yo", title: "", day: 1, start: "18:00", end: "19:30" });
   const [agendaDay, setAgendaDay] = useState(dow); // día seleccionado en el timeline de Agenda
 
+  /* ============ BONUS: una lectura + un ejercicio por día (previa de Geografía) ============ */
+  // Progreso en state.bonus[lessonId] = { leido, respuesta, guia, hecho }
+  const bonusIdx = Math.min(Math.max(bonusDayIndex(today), 0), BONUS_LESSONS.length - 1);
+  const bonusHoy = BONUS_LESSONS[bonusIdx];
+  const bonusProg = (id) => (state.bonus || {})[id] || {};
+  const bonusPendHoy = bonusDayIndex(today) < BONUS_LESSONS.length && !bonusProg(bonusHoy.id).hecho;
+
+  function Bonus() {
+    const sel = Math.min(Math.max(bonusSel ?? bonusIdx, 0), BONUS_LESSONS.length - 1);
+    const L = BONUS_LESSONS[sel];
+    const p = bonusProg(L.id);
+    const hechos = BONUS_LESSONS.filter((x) => bonusProg(x.id).hecho).length;
+    const atrasadas = BONUS_LESSONS.slice(0, bonusIdx).filter((x) => !bonusProg(x.id).hecho);
+    const setP = (fn) => up((s) => { s.bonus = s.bonus || {}; s.bonus[L.id] = s.bonus[L.id] || {}; fn(s.bonus[L.id], s); return s; });
+    const fechaDe = (i) => {
+      const d = new Date(BONUS_START + "T00:00:00");
+      d.setDate(d.getDate() + i);
+      return `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}`;
+    };
+    const minChars = 120; // obliga a intentar antes de ver la guía
+    const largo = (p.respuesta || "").trim().length;
+    const navBtn = { width: 36, height: 36, borderRadius: 12, border: "none", cursor: "pointer", background: C.soft, color: C.ink, display: "flex", alignItems: "center", justifyContent: "center" };
+    const tag = (bg, color) => ({ fontSize: 11, fontWeight: 800, padding: "2px 8px", borderRadius: 999, background: bg, color });
+    const boxTitle = { fontSize: 11.5, fontWeight: 800, color: C.sub, letterSpacing: 0.4, marginBottom: 6 };
+    // Al terminar se tilda el tema correspondiente en Agenda → Materias
+    const terminar = () => setP((x, s) => {
+      x.hecho = true;
+      if (L.tema != null) {
+        const m = (s.subjects || []).find((y) => y.id === BONUS_SUBJECT_ID);
+        const t = m && (m.temas || []).find((y) => y.id === `geo2-t${L.tema + 1}`);
+        if (t) t.done = true;
+      }
+    });
+    return (
+      <>
+        <PageHeader title="Bonus" subtitle="Previa de Geografía" />
+
+        <Card style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 12, fontWeight: 800, color: C.sub }}>PROGRESO · {hechos}/{BONUS_LESSONS.length}</div>
+            <div style={{ height: 6, borderRadius: 999, background: C.soft, overflow: "hidden", marginTop: 6 }}>
+              <div style={{ width: `${(hechos / BONUS_LESSONS.length) * 100}%`, height: "100%", borderRadius: 999, background: C.primary }} />
+            </div>
+          </div>
+          {atrasadas.length > 0 && (
+            <Btn kind="soft" small onClick={() => setBonusSel(BONUS_LESSONS.indexOf(atrasadas[0]))}>{atrasadas.length} atrasada{atrasadas.length === 1 ? "" : "s"}</Btn>
+          )}
+        </Card>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "16px 0 10px" }}>
+          <button aria-label="Lección anterior" style={{ ...navBtn, opacity: sel === 0 ? 0.35 : 1 }} disabled={sel === 0} onClick={() => setBonusSel(sel - 1)}><ChevronLeft size={18} /></button>
+          <div style={{ flex: 1, textAlign: "center", fontSize: 12.5, fontWeight: 800, color: sel === bonusIdx ? C.primary : C.sub }}>
+            {sel === bonusIdx ? "HOY" : sel < bonusIdx ? "DÍA ANTERIOR" : "ADELANTO"} · Día {sel + 1} · {fechaDe(sel)} · {L.unidad}
+          </div>
+          <button aria-label="Lección siguiente" style={{ ...navBtn, opacity: sel === BONUS_LESSONS.length - 1 ? 0.35 : 1 }} disabled={sel === BONUS_LESSONS.length - 1} onClick={() => setBonusSel(sel + 1)}><ChevronRight size={18} /></button>
+        </div>
+
+        <Card>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={tag(C.primarySoft, C.theme === "dark" ? C.primaryInk : C.primary)}>📖 LECTURA</span>
+            {p.hecho && <span style={tag("rgba(52,199,89,0.14)", "#2e9e4f")}>✓ TERMINADA</span>}
+          </div>
+          <h2 style={{ margin: "10px 0 8px", fontSize: 21, fontWeight: 800, letterSpacing: -0.4, lineHeight: 1.2 }}>{L.titulo}</h2>
+          {L.lectura.map((par, i) => (
+            <p key={i} style={{ margin: "0 0 10px", fontSize: 15, lineHeight: 1.55, color: C.ink }}>{par}</p>
+          ))}
+          <div style={{ background: C.soft, borderRadius: 12, padding: "10px 12px", marginTop: 4 }}>
+            <div style={boxTitle}>IDEAS CLAVE</div>
+            {L.claves.map((c, i) => <div key={i} style={{ fontSize: 13.5, fontWeight: 600, lineHeight: 1.5 }}>• {c}</div>)}
+          </div>
+          {!p.leido && (
+            <div style={{ marginTop: 12, textAlign: "right" }}>
+              <Btn onClick={() => setP((x) => { x.leido = true; })}>Ya lo leí → ejercicio</Btn>
+            </div>
+          )}
+        </Card>
+
+        {p.leido && (
+          <Card style={{ marginTop: 12 }}>
+            <span style={tag("rgba(255,149,0,0.14)", C.amber)}>✍️ EJERCICIO</span>
+            <p style={{ margin: "10px 0", fontSize: 15, lineHeight: 1.55, fontWeight: 600 }}>{L.ejercicio.consigna}</p>
+            <textarea
+              placeholder="Escribí tu respuesta acá (se guarda sola)…"
+              value={p.respuesta || ""}
+              onChange={(e) => setP((x) => { x.respuesta = e.target.value; })}
+              style={{
+                width: "100%", boxSizing: "border-box", minHeight: 180, resize: "vertical",
+                border: `1.5px solid ${C.line}`, borderRadius: 12, padding: 10,
+                fontFamily: FONT, fontSize: 14.5, lineHeight: 1.5, background: C.input, color: C.ink, outline: "none",
+              }} />
+            {!p.guia ? (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginTop: 8 }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: C.sub }}>
+                  {largo < minChars ? `Escribí un poco más para ver la guía (${largo}/${minChars})` : "Listo, ya podés corregirte"}
+                </span>
+                <Btn small kind={largo < minChars ? "soft" : "primary"} style={{ opacity: largo < minChars ? 0.5 : 1 }}
+                  onClick={() => { if (largo < minChars) { flash("Primero intentá responder 💪"); return; } setP((x) => { x.guia = true; }); }}>Ver guía de corrección</Btn>
+              </div>
+            ) : (
+              <>
+                <div style={{ background: C.soft, borderRadius: 12, padding: "10px 12px", marginTop: 10 }}>
+                  <div style={boxTitle}>GUÍA DE CORRECCIÓN · ¿TU RESPUESTA TIENE ESTO?</div>
+                  {L.ejercicio.guia.map((g, i) => <div key={i} style={{ fontSize: 13.5, fontWeight: 600, lineHeight: 1.5, marginBottom: 4 }}>☐ {g}</div>)}
+                </div>
+                <div style={{ marginTop: 12, textAlign: "right" }}>
+                  {p.hecho
+                    ? <span style={{ fontSize: 13, fontWeight: 800, color: "#2e9e4f" }}>✓ Terminado{L.tema != null ? " · tema tildado en Materias" : ""}</span>
+                    : <Btn onClick={() => { terminar(); flash("🧠 Bonus del día completo"); }}>Lo corregí, terminar</Btn>}
+                </div>
+              </>
+            )}
+          </Card>
+        )}
+      </>
+    );
+  }
+
   /* ============ AGENDA / CRONOGRAMA ============ */
   function Agenda() {
     const OWNER = {
@@ -4820,6 +4953,7 @@ export default function App() {
   const tabs = [
     { id: "gym", label: "Gym", Icon: Dumbbell },
     { id: "agenda", label: "Agenda", Icon: Calendar },
+    { id: "bonus", label: "Bonus", Icon: Lightbulb },
     { id: "hoy", label: "Hoy", Icon: Sun },
     { id: "habitos", label: "Hábitos", Icon: Target },
     { id: "dieta", label: "Dieta", Icon: Salad },
@@ -5008,6 +5142,7 @@ export default function App() {
         <div key={tab} style={{ animation: "norteFadeUp 0.34s cubic-bezier(0.22,1,0.36,1) both" }}>
           {tab === "hoy" && Hoy()}
           {tab === "agenda" && Agenda()}
+          {tab === "bonus" && Bonus()}
           {tab === "habitos" && Habitos()}
           {tab === "gym" && Gym()}
           {tab === "dieta" && Dieta()}
