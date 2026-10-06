@@ -1,14 +1,15 @@
 {
-  // Deploy de la PWA NORTE como Worker de assets estáticos (Cloudflare Workers Builds).
-  // Cloudflare corre:  build command -> "npx vite build"  (genera ./dist)
-  //                    deploy command -> "npx wrangler deploy"  (sube ./dist)
-  // Queda publicada en  https://norte.arcossz.workers.dev
-  // OJO: no confundir con worker/wrangler.jsonc, que es el relay de notificaciones (nexofit-push).
+  // Deploy de la versión web de Vamo (antes NORTE) como Worker de archivos estáticos.
+  // Cloudflare Workers Builds, en cada push a main:
+  //   build command  -> "npx vite build"   (heredado de NORTE: vite.config.mjs lo redirige a "npm run build:web")
+  //   deploy command -> "npx wrangler deploy"  (sube ./dist)
+  // Queda publicada en https://norte.arcossz.workers.dev (mismo nombre "norte" para no cambiar la URL).
+  // OJO: no confundir con worker/wrangler.jsonc, que es el relay de NEXO/notificaciones (nexofit-push).
   "name": "norte",
   "compatibility_date": "2025-06-01",
   "assets": {
     "directory": "./dist",
-    // La app es una sola página (sin rutas): servir index.html para cualquier ruta desconocida.
+    // App de una sola página: cualquier ruta (/run/123, /habitos…) sirve index.html
     "not_found_handling": "single-page-application"
   }
 }

@@ -1,123 +1,90 @@
-# NORTE
+# Vamo (app para Android y iPhone)
 
-App de hábitos, gimnasio, dieta y agenda, con integración por voz con NEXO (asistente personal). PWA lista para instalar en iPhone.
+App de entrenamiento: **correr con GPS y mapa** (tipo Strava / adidas Running), **entreno** (series, saturación muscular, hipertrofia), **comida** (kcal estimadas por texto), **agua**, **ayuno**, **peso y % de grasa/músculo**. Hecha con Expo (React Native).
 
-## 🔒 Protección con PIN
+Cuentas con **Google, Apple o email** (código de 6 dígitos). Los datos se guardan primero en el teléfono (anda sin señal) y se sincronizan con la nube (Supabase).
 
-La app arranca con una pantalla de bloqueo de 4 dígitos:
+## Probarla ya en tu teléfono (sin cuentas)
 
-- **Primera vez que la abrís**: viene con un PIN por defecto (4444) ya cargado. Cambialo en Más → Seguridad.
-- **Cada sesión nueva**: te pide el PIN para entrar (o Face ID/huella si lo activaste). Una vez desbloqueada, queda así hasta que cierres la pestaña o mates la PWA.
-- **Si olvidás el PIN**: después de 3 intentos fallidos aparece un botón para restablecer la app (borra todos los datos y arranca de cero).
+1. Instalá **Expo Go** en el teléfono (Play Store / App Store).
+2. En la compu, desde esta carpeta: `npx expo start`
+3. Escaneá el QR (Android: desde Expo Go; iPhone: con la cámara).
+4. En la pantalla de inicio tocá **Probar sin cuenta**.
 
-El PIN se guarda **hasheado con SHA-256** en el `localStorage` de tu iPhone (no en texto plano).
+En Expo Go el GPS registra **solo con la app abierta** (la pantalla queda prendida). Con la build propia (paso 2) sigue grabando con el teléfono bloqueado.
 
-## Nota sobre privacidad
+## 1. Activar cuentas y nube (Supabase, gratis)
 
-- El repo (`github.com/thiagoarcos/norte`) es **público**: cualquiera puede ver el código, incluida la URL y el token del relay de push bakeados en `src/App.jsx`. Rotalos (ver más abajo) si alguna vez se filtran o parecen comprometidos.
-- La app publicada también es de acceso público por link: cualquiera con la URL puede abrirla. Tus datos personales NO viajan ahí — se guardan en el `localStorage` de tu iPhone. Otra persona que entrara vería la app vacía, como recién instalada, y no podría pasar del PIN sin conocerlo.
+1. Creá un proyecto en https://supabase.com.
+2. `npx supabase link --project-ref <ref>` y `npx supabase db push` (crea las tablas de `supabase/migrations/`).
+3. **Project Settings → API**: copiá la URL y la *publishable key* a un archivo `.env.local` (usá `.env.example` de modelo).
+4. **Authentication → URL Configuration → Redirect URLs**: agregá `vamo://auth` (y para pruebas en Expo Go la URL `exp://…/--/auth` que aparece en la terminal).
+5. **Authentication → Providers**:
+   - **Email**: activado por defecto. En *Email Templates → Magic Link* poné `{{ .Token }}` en el cuerpo para que llegue el código de 6 dígitos.
+   - **Google**: creá credenciales OAuth en Google Cloud Console (tipo *Web*) y pegá Client ID y Secret en Supabase.
+   - **Apple**: necesita la cuenta de Apple Developer (paso 2). Activalo con el bundle id `com.arcossz.vamo`.
+6. Reiniciá `npx expo start`.
 
-## Requisitos
+### Foto del plato (IA)
 
-- **Node.js 18+**: https://nodejs.org (elegí LTS).
-- **Git** y una **cuenta de GitHub** (el repo ya existe: `thiagoarcos/norte`).
-- **Cuenta de Cloudflare** (gratis) con `wrangler` autenticado (`npx wrangler login`, una sola vez).
-
-## Desarrollo local
-
-```bash
-npm install
-npm run dev
-```
-
-Abrí `http://localhost:5173/` y verificá que anda. Ctrl+C para cerrar.
-
-## Deploy de NORTE (la app)
-
-Se deploya como **Cloudflare Worker de assets estáticos** (no GitHub Pages) — ver `wrangler.jsonc` en la raíz. Cloudflare Workers Builds está conectado al repo de GitHub: cada `git push` a `main` dispara automáticamente:
-
-1. `npx vite build` → genera `./dist`
-2. `npx wrangler deploy` → sube `./dist`
+La estimación por foto usa Claude desde una función de Supabase (la API key nunca va dentro de la app):
 
 ```bash
-git add .
-git commit -m "descripción del cambio"
-git push
+npx supabase login
+npx supabase link --project-ref <tu-proyecto>
+npx supabase secrets set ANTHROPIC_API_KEY=sk-ant-...     # de console.anthropic.com
+npx supabase functions deploy estimate-food
 ```
 
-En 1–2 minutos queda publicada en **`https://norte.arcossz.workers.dev`**. En tu iPhone se actualiza sola la próxima vez que abrís la app (el Service Worker purga cachés viejos en cada deploy).
+Cada foto cuesta unos centavos de dólar de API: tenelo en cuenta para el precio de Vamo Pro.
 
-Si alguna vez hace falta deployar a mano sin esperar el push (por ejemplo para probar algo puntual): `npx vite build && npx wrangler deploy` desde la raíz del repo.
+### Amigos
 
-## Deploy del relay de notificaciones/chat (`worker/`)
+Las tablas `profiles`, `follows`, `activities` y `kudos` ya están en `supabase/migrations/`. Cada usuario elige su @usuario la primera vez que entra a **Correr → Amigos**; sus salidas se ven solo para quienes lo siguen.
 
-Es un **worker aparte** (`nexofit-push`) que maneja los recordatorios push y el puente de chat con NEXO. No se deploya solo con el `git push` de arriba — hay que hacerlo a mano desde `worker/`:
+## 2. Build propia (GPS con pantalla bloqueada, Apple, tiendas)
+
+Esto también activa **Apple Health / Health Connect** (pasos, pulso, guardar salidas), que no existen en Expo Go.
+
+Necesitás una cuenta gratis de Expo: `npx eas-cli@latest login`.
 
 ```bash
-cd worker
-npx wrangler login       # una sola vez
-npx wrangler deploy
-npx wrangler secret put VAPID_PRIVATE_KEY   # solo si cambiaron las claves
-npx wrangler secret put AUTH_TOKEN          # solo si rotaste el token
+npx eas-cli@latest build:configure
+npx eas-cli@latest build --profile development --platform android   # APK para tu Android
+npx eas-cli@latest build --profile development --platform ios       # requiere Apple Developer
 ```
 
-Detalle completo en `worker/README.md`.
+Las builds se hacen en la nube de Expo: no hace falta Android Studio ni una Mac.
 
-### Rotar el token del relay
+- **Android en Google Play**: cuenta de desarrollador (US$25, pago único).
+- **iPhone en App Store**: Apple Developer Program (US$99/año). Obligatorio también para *Iniciar con Apple* y para TestFlight (la beta).
+- **Mapa en Android**: creá una API key de *Maps SDK for Android* en Google Cloud y ponela en `GOOGLE_MAPS_API_KEY` antes de la build.
 
-El token vive en dos lugares que tienen que coincidir:
+## 3. Beta → pago (US$10/mes)
 
-1. `src/App.jsx` → constante `RELAY_TOKEN` (se re-deploya con el `git push` normal).
-2. El secreto `AUTH_TOKEN` del worker (`npx wrangler secret put AUTH_TOKEN` desde `worker/`).
+Por ahora todo es gratis (beta). Para cobrar, Apple y Google exigen usar **su** sistema de suscripciones (In-App Purchase). El plan es usar **RevenueCat**, que maneja las dos tiendas y escribe el estado en la tabla `subscriptions` (ya creada).
 
-Si ya tenés la app instalada en el iPhone con push/chat configurados a mano (Más → Notificaciones), **ese token queda guardado en el `localStorage` del teléfono y no se actualiza solo** — hay que volver a pegarlo ahí después de rotar.
+## Comandos
 
-## Instalar en tu iPhone
-
-1. Abrí `https://norte.arcossz.workers.dev` en **Safari** (obligatorio, no Chrome).
-2. Botón **Compartir** (cuadradito con flecha para arriba).
-3. Bajá y tocá **Agregar a inicio**.
-4. Nombre "NORTE" → **Agregar**.
-
-Aparece el ícono verde en tu home. Se abre en pantalla completa, sin barra de Safari.
-
-## Hablarle a NORTE (voz + NEXO)
-
-En la pestaña del chat con NEXO (orbe flotante):
-
-- **🎤 Mic**: dicta el mensaje (Web Speech API donde el navegador la soporte; si no, enfoca el input para usar el 🎤 del teclado de iOS).
-- **🔊/🔇**: prende o apaga que NORTE lea en voz alta las respuestas de NEXO. Tocando cualquier respuesta la vuelve a leer.
-- Si NEXO (`nexo_bridge.py` en tu PC) está apagado, el mensaje **no se pierde**: queda guardado en el relay y se entrega apenas se reconecta. Si la respuesta llega mientras no estás mirando el chat, aparece sola (y se lee) la próxima vez que lo abrís, y además llega como notificación push nativa.
-
-## Problemas comunes
-
-**"La app se ve toda blanca / no carga"**
-- Mirá la pestaña **Deployments** del Worker en el dashboard de Cloudflare — ahí está el log del build que corrió con el último push.
-
-**"Instalé la PWA pero no se actualiza"**
-- En Safari: Ajustes → Safari → Borrar historial y datos. Volvé a abrir el link e instalar.
-
-**"Los recordatorios no me llegan si la app está cerrada"**
-- Limitación de iOS con PWAs. Cargalos también en la app Recordatorios de tu iPhone.
-
-**"NEXO no me contesta"**
-- Revisá que `nexo_bridge.py` esté corriendo en tu PC. El mensaje queda encolado igual — en cuanto lo prendas, te llega la respuesta (por chat y por push).
+```bash
+npx expo start        # servidor de desarrollo (QR para Expo Go)
+npm run typecheck     # chequeo de tipos
+npx expo lint         # lint
+npx expo-doctor       # diagnóstico de dependencias
+```
 
 ## Estructura
 
 ```
-norte/
-├── package.json
-├── vite.config.js        base "/" (Cloudflare Workers, dominio propio)
-├── wrangler.jsonc         deploy de NORTE (assets estáticos, ./dist)
-├── index.html
-├── src/
-│   ├── main.jsx
-│   ├── App.jsx            toda la app (una sola pantalla, sin rutas)
-│   └── defaultProgram.js  rutina de gym por defecto
-├── public/                íconos, service worker push
-└── worker/                relay aparte: push nativo + puente de chat con NEXO
-    ├── src/index.js       endpoints (schedule, chat/*, agenda/*, cmd/*)
-    ├── src/webpush.js     Web Push (RFC 8291/8292) hecho a mano
-    └── README.md          deploy y funcionamiento del relay
+src/app/            pantallas (Expo Router)
+  login.tsx         inicio de sesión
+  (tabs)/           Hoy · Correr · Entreno · Comida · Perfil
+  run/live.tsx      salida en vivo (mapa + métricas)
+  run/[id].tsx      detalle de una salida
+src/lib/
+  store.ts          datos (teléfono + sincronización con Supabase)
+  runTracker.ts     GPS en segundo plano, parciales, desnivel
+  fitness.js        lógica compartida con la PWA (kcal, plan de running, músculos, % grasa, ayuno)
+  auth.tsx          Google / Apple / email
+supabase/migrations/ base de datos (tablas + seguridad)
 ```
