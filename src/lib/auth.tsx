@@ -76,6 +76,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         email: email.trim().toLowerCase(),
         options: { emailRedirectTo: makeRedirectUri({ path: 'auth' }) },
       });
+      // El mail que trae Supabase de fábrica manda muy pocos por hora (y 1 por minuto por email)
+      if (error && (error.status === 429 || /rate limit/i.test(error.message))) {
+        throw new Error('Se mandaron demasiados mails seguidos. Esperá unos minutos y probá de nuevo, o entrá con Google.');
+      }
       if (error) throw error;
     },
     async verifyEmailCode(email, code) {
