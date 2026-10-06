@@ -1,9 +1,9 @@
 /* Destino de los links de inicio de sesión (vamo://auth, o /auth en la web):
    - link del mail ("Ingresar"): trae ?code=… → lo canjeamos por la sesión.
-   - Google: el código lo canjea src/lib/auth.tsx; acá solo volvemos al inicio. */
+   - Google: en la web vuelve acá con ?code=… (misma pestaña); en el teléfono lo canjea src/lib/auth.tsx. */
 import { Redirect, useLocalSearchParams } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Platform, Text, View } from 'react-native';
+import { ActivityIndicator, Text, View } from 'react-native';
 
 import { useColors } from '@/constants/theme';
 import { supabase } from '@/lib/supabase';
@@ -16,11 +16,14 @@ export default function AuthCallback() {
 
   useEffect(() => {
     if (!params.code || !supabase) return;
-    // Web + Google: esta página se abrió en la ventanita del login; la ventana principal
-    // canjea el código (WebBrowser.maybeCompleteAuthSession le pasa la URL y cierra esta).
-    if (Platform.OS === 'web' && typeof window !== 'undefined' && window.opener) return;
     supabase.auth.exchangeCodeForSession(params.code)
-      .then(({ error }) => { if (error) setErr('El link venció o ya se usó. Pedí uno nuevo desde la app.'); })
+      .then(({ error }) => {
+        if (!error) return;
+        // Web: si la sesión ya se abrió sola con este código, no es un error
+        supabase!.auth.getSession().then(({ data }) => {
+          if (!data.session) setErr('No se pudo iniciar sesión (el link venció o ya se usó). Probá de nuevo desde la app.');
+        });
+      })
       .finally(() => setDone(true));
   }, [params.code]);
 

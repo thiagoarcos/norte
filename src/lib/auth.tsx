@@ -84,6 +84,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     },
     async signInWithGoogle() {
       const sb = need();
+      if (Platform.OS === 'web') {
+        // En la web vamos a Google en la misma pestaña y volvemos a /auth?code=… (lo canjea
+        // src/app/auth.tsx). La ventanita (popup) se quedaba en about:blank: Google le corta
+        // la comunicación con la página que la abrió.
+        const { error } = await sb.auth.signInWithOAuth({
+          provider: 'google',
+          options: { redirectTo: `${window.location.origin}/auth` },
+        });
+        if (error) throw error;
+        return;
+      }
       const redirectTo = makeRedirectUri({ path: 'auth' });
       const { data, error } = await sb.auth.signInWithOAuth({
         provider: 'google',
