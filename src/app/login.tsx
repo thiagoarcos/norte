@@ -1,4 +1,4 @@
-/* Bienvenida + inicio de sesión: Apple (iPhone), Google o email con código. */
+/* Bienvenida + inicio de sesión: Apple (iPhone), Google, email + contraseña o link al mail. */
 import { Ionicons } from '@expo/vector-icons';
 import * as AppleAuthentication from 'expo-apple-authentication';
 import { useEffect, useState } from 'react';
@@ -18,6 +18,7 @@ export default function Login() {
   const [appleOk, setAppleOk] = useState(false);
   const [mode, setMode] = useState<'start' | 'email' | 'code' | 'local'>('start');
   const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [code, setCode] = useState('');
   const [name, setName] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
@@ -34,6 +35,12 @@ export default function Login() {
       if (e?.code !== 'ERR_REQUEST_CANCELED') setErr(e?.message || 'Algo salió mal. Probá de nuevo.');
     } finally { setBusy(null); }
   };
+
+  const signIn = () => run('password', async () => {
+    if (!/^\S+@\S+\.\S+$/.test(email.trim())) throw new Error('Revisá el email.');
+    if (!password) throw new Error('Escribí tu contraseña.');
+    await auth.signInWithPassword(email, password);
+  });
 
   return (
     <KeyboardAvoidingView style={{ flex: 1, backgroundColor: c.bg }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -71,7 +78,7 @@ export default function Login() {
                 disabled={!cloudEnabled}
               />
               <Button
-                kind="soft" title="Continuar con email"
+                kind="soft" title="Entrar con email y contraseña"
                 icon={<Ionicons name="mail" size={18} color={c.scheme === 'dark' ? c.primaryInk : c.primary} />}
                 onPress={() => { setErr(null); setMode('email'); }}
                 disabled={!cloudEnabled}
@@ -89,10 +96,14 @@ export default function Login() {
 
           {mode === 'email' && (
             <>
-              <Text style={{ color: c.ink, fontSize: 20, fontWeight: '800' }}>Tu email</Text>
-              <Text style={{ color: c.sub, fontSize: 14 }}>Te mandamos un mail para entrar. Sin contraseñas.</Text>
+              <Text style={{ color: c.ink, fontSize: 20, fontWeight: '800' }}>Iniciar sesión</Text>
               <Field value={email} onChangeText={setEmail} placeholder="vos@gmail.com" keyboardType="email-address" autoCapitalize="none" autoComplete="email" autoFocus />
-              <Button title="Mandarme el mail" loading={busy === 'send'}
+              <Field value={password} onChangeText={setPassword} placeholder="Contraseña" secureTextEntry autoCapitalize="none"
+                autoComplete="current-password" textContentType="password"
+                onSubmitEditing={() => signIn()} returnKeyType="go" />
+              <Button title="Entrar" loading={busy === 'password'} onPress={() => signIn()} />
+              <Text style={{ color: c.sub, fontSize: 13, textAlign: 'center', marginTop: 8 }}>¿No tenés contraseña o te la olvidaste?</Text>
+              <Button kind="soft" title="Mandarme un link al mail" loading={busy === 'send'}
                 onPress={() => run('send', async () => {
                   if (!/^\S+@\S+\.\S+$/.test(email.trim())) throw new Error('Revisá el email.');
                   await auth.sendEmailCode(email);

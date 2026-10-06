@@ -24,7 +24,7 @@ import { disableWebPush, enableWebPush, webPushSupported } from '@/lib/webpush';
 
 export default function Mas() {
   const c = useColors();
-  const { user, signOut } = useAuth();
+  const { user, signOut, changePassword } = useAuth();
   const d = useNorte();
   const s = d.s;
   const settings = useSettings();
@@ -33,6 +33,8 @@ export default function Mas() {
   const [newRem, setNewRem] = useState({ text: '', time: '18:00' });
   const [newTip, setNewTip] = useState('');
   const [importing, setImporting] = useState(false);
+  const [newPass, setNewPass] = useState('');
+  const [savingPass, setSavingPass] = useState(false);
   const notifs = { ...DEFAULT_NOTIFS, ...(s.notifs || {}) };
   const isWeb = Platform.OS === 'web';
   const theme = settings.theme || 'system';
@@ -255,6 +257,26 @@ export default function Mas() {
                 else Alert.alert('No se pudo conectar', Platform.OS === 'android' ? 'Instalá o actualizá Health Connect desde Play Store.' : 'Revisá los permisos en Salud → Perfil → Apps → Vamo.');
               }} />
             ) : <Note>Disponible en la app instalada (no en Expo Go).</Note>}
+          </Card>
+        </>
+      )}
+
+      {/* Contraseña (para entrar con email + contraseña) */}
+      {user && !user.local && (
+        <>
+          <Section title="Contraseña" />
+          <Card style={{ gap: 10 }}>
+            <Text style={{ color: c.sub, fontSize: 12.5, lineHeight: 18 }}>
+              Para entrar con {user.email ?? 'tu email'} y contraseña. Si entrás con Google, también podés ponerte una.
+            </Text>
+            <Field value={newPass} onChangeText={setNewPass} placeholder="Nueva contraseña (mín. 6)" secureTextEntry
+              autoCapitalize="none" autoComplete="new-password" textContentType="newPassword" />
+            <Button title={savingPass ? 'Guardando…' : 'Cambiar contraseña'} disabled={savingPass || newPass.length < 6} onPress={async () => {
+              setSavingPass(true);
+              try { await changePassword(newPass); setNewPass(''); flash('🔒 Contraseña cambiada'); }
+              catch (e: any) { Alert.alert('No se pudo cambiar', e?.message ?? String(e)); }
+              finally { setSavingPass(false); }
+            }} />
           </Card>
         </>
       )}

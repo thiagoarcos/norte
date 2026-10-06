@@ -1,4 +1,4 @@
-/* Sesión del usuario: Google, Apple o email (código de 6 dígitos, sin contraseña).
+/* Sesión del usuario: Google, Apple, email + contraseña o email con link (sin contraseña).
    Sin Supabase configurado → "modo local" (un usuario invitado guardado en el teléfono). */
 import type { Session } from '@supabase/supabase-js';
 import * as AppleAuthentication from 'expo-apple-authentication';
@@ -18,6 +18,8 @@ export type User = { id: string; email: string | null; name: string | null; loca
 type AuthCtx = {
   ready: boolean;
   user: User | null;
+  signInWithPassword: (email: string, password: string) => Promise<void>;
+  changePassword: (password: string) => Promise<void>;
   sendEmailCode: (email: string) => Promise<void>;
   verifyEmailCode: (email: string, code: string) => Promise<void>;
   signInWithGoogle: () => Promise<void>;
@@ -69,6 +71,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const value: AuthCtx = {
     ready,
     user,
+    async signInWithPassword(email, password) {
+      const { error } = await need().auth.signInWithPassword({ email: email.trim().toLowerCase(), password });
+      if (error && /invalid login credentials/i.test(error.message)) {
+        throw new Error('Email o contraseña incorrectos. Si nunca pusiste contraseña, entrá con Google o con un link al mail.');
+      }
+      if (error) throw error;
+    },
+    async changePassword(password) {
+      if (password.length < 6) throw new Error('La contraseña tiene que tener al menos 6 caracteres.');
+      const { error } = await need().auth.updateUser({ password });
+      if (error && /different from the old/i.test(error.message)) throw new Error('Es la misma contraseña que ya tenías.');
+      if (error) throw error;
+    },
     async sendEmailCode(email) {
       // El mail trae un link "Ingresar" que vuelve a la app (vamo://auth?code=…) y además,
       // si algún día configuramos un SMTP propio con {{ .Token }}, un código de 6 dígitos.
