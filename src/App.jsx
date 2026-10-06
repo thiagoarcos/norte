@@ -1,13 +1,18 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useId } from "react";
 import {
   Target, Dumbbell, Sun, Moon, Salad, Settings, Trophy, Flame, Zap, Droplet,
   TrendingUp, Apple, Sprout, Lock, Unlock, Bell, Lightbulb, Smartphone, X, Calendar,
   Upload, Award, PersonStanding, Check as CheckIcon, Video, Pencil, AlertTriangle, ScanFace,
   Bot, Send, Pause, Play, Clock, Menu, Mic, Volume2, VolumeX,
   Wallet, Coins, Landmark, DollarSign, LineChart, Plus, RefreshCw, Ghost, Building2,
-  ChevronLeft, ChevronRight, Trash2, Home,
+  ChevronLeft, ChevronRight, Trash2, Home, HeartPulse, Undo2, Hourglass, Footprints, MapPin, Square, Sparkles, Scale,
 } from "lucide-react";
 import { buildDefaultProgram } from "./defaultProgram";
+import {
+  estimateFood, runTargetKm, runLevelInfo, RUN_DEFAULTS, haversineKm, acceptPoint, fmtPace, fmtDur,
+  computeSplits, downsample, runKcal, weeklySets, plannedSets, saturation, VOLUME,
+  navyBodyFat, composition, monthly, fastStatus, fastHours, fastIntervals,
+} from "./fitness";
 import { BONUS_LESSONS, BONUS_START, BONUS_SUBJECT_ID, bonusDayIndex } from "./bonusGeografia";
 
 /* ============ NORTE (ex NEXO FIT) v4 ============
@@ -25,6 +30,7 @@ const LIGHT = {
   amber: "#F59E0B", amberSoft: "#FEF3E2", amberInk: "#B45309",
   blue: "#00BFFF", blueSoft: "#E5F7FF", red: "#EF4444",
   navBg: "rgba(255,255,255,0.72)", body: "#E4E6EB",
+  green: "#16A34A", greenSoft: "#E7F7EC",
 };
 const DARK = {
   bg: "#08090C", card: "#101116", ink: "#F5F6F8", sub: "#8B8F9A",
@@ -34,6 +40,7 @@ const DARK = {
   amber: "#FBBF24", amberSoft: "#3A2A0B", amberInk: "#FCD34D",
   blue: "#22DAFF", blueSoft: "#0E2A3B", red: "#F87171",
   navBg: "rgba(8,9,12,0.75)", body: "#1E2028",
+  green: "#4ADE80", greenSoft: "#0F2A1A",
 };
 const C = { ...LIGHT };
 
@@ -523,7 +530,6 @@ const initialState = {
   theme: "light",
   habits: [
     { id: "h1", name: "Entrenar", icon: "🏋️", days: [1, 2, 3, 4, 5], history: {} },
-    { id: "h2", name: "Tomar 2L de agua", icon: "💧", days: [0, 1, 2, 3, 4, 5, 6], history: {} },
     { id: "h3", name: "Dormir antes de las 00", icon: "😴", days: [0, 1, 2, 3, 4, 5, 6], history: {} },
   ],
   workoutLog: {},
@@ -535,7 +541,10 @@ const initialState = {
   program: buildDefaultProgram(),
   meals: {},
   mealLibrary: [],
-  water: {},
+  water: {}, // legado: vasos por día (se migra a waterLog)
+  waterLog: {}, // { "YYYY-MM-DD": [{ id, ml, t }] }
+  waterV: 1,
+  fasting: { windows: [] }, // horarios de ayuno: solo los edita el usuario (NEXO no los toca)
   weightLog: {},
   measurements: [],
   notes: {},
@@ -543,7 +552,7 @@ const initialState = {
     { id: uid(), text: "Hora de entrenar 💪", time: "18:00", days: [1, 2, 3, 4, 5] },
     { id: uid(), text: "Registrá tu cena 🍽️", time: "21:30", days: [0, 1, 2, 3, 4, 5, 6] },
   ],
-  goals: { kcal: 2500, protein: 140, carbs: 300, fat: 80, water: 8 },
+  goals: { kcal: 2500, protein: 140, carbs: 300, fat: 80, waterMl: 2000 },
   customTips: [],
   cut: null,
   // Plata: patrimonio en wallets/cuentas. moneda = "USD" | "ARS"; tipo = "crypto" | "pesos" | "inversion"
@@ -637,6 +646,9 @@ const initialState = {
 };
 
 const STORAGE_KEY = "nexofit-state-v4";
+const RUN_LIVE_KEY = "nexofit-run-live-v1"; // salida a correr en curso (GPS)
+// Ayunos que empiezan/terminan cerca de `now` (para los avisos)
+const fastIntervalsNear = (fasting, now) => fastIntervals((fasting || {}).windows, now, -1, 1);
 
 async function loadState() {
   for (const key of [STORAGE_KEY, "nexofit-state-v3", "nexofit-state-v2", "nexofit-state-v1"]) {
@@ -826,12 +838,176 @@ function Segmented({ options, value, onChange }) {
   );
 }
 
+/* ============ ESFERA DE AGUA: se llena con ondas a medida que tomás ============ */
+function WaterSphere({ pct, size = 220, children }) {
+  const id = useId().replace(/:/g, "");
+  const p = Math.max(0, Math.min(1, pct || 0));
+  const level = 212 - p * 204; // superficie del agua dentro del círculo (y 8 → 212)
+  // 8 tramos de 55 = 4 longitudes de onda de 110; se desplaza 110 para un loop sin saltos
+  const wave = (amp) => `M -220 0 q 27.5 ${-amp} 55 0 t 55 0 t 55 0 t 55 0 t 55 0 t 55 0 t 55 0 t 55 0 V 240 H -220 Z`;
+  const full = p >= 1;
+  return (
+    <div style={{ position: "relative", width: size, height: size, margin: "0 auto" }}>
+      <svg viewBox="0 0 220 220" width={size} height={size} style={{ display: "block", overflow: "visible" }}>
+        <style>{`
+          @keyframes wv${id} { from { transform: translateX(0); } to { transform: translateX(110px); } }
+          .w1${id} { animation: wv${id} 3.2s linear infinite; }
+          .w2${id} { animation: wv${id} 5s linear infinite reverse; }
+        `}</style>
+        <defs>
+          <clipPath id={`c${id}`}><circle cx="110" cy="110" r="102" /></clipPath>
+          <linearGradient id={`g${id}`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stopColor={C.accent} />
+            <stop offset="1" stopColor={C.primary} />
+          </linearGradient>
+        </defs>
+        <circle cx="110" cy="110" r="106" fill={C.blueSoft} stroke={full ? C.primary : C.blue} strokeWidth="4" opacity="0.95" />
+        <g clipPath={`url(#c${id})`}>
+          <g style={{ transform: `translateY(${level}px)`, transition: "transform 0.9s cubic-bezier(.3,1.3,.5,1)" }}>
+            <path className={`w2${id}`} d={wave(7)} fill={C.accent} opacity="0.45" transform="translate(0,-4)" />
+            <path className={`w1${id}`} d={wave(9)} fill={`url(#g${id})`} />
+          </g>
+        </g>
+        <ellipse cx="72" cy="58" rx="22" ry="12" transform="rotate(-35 72 58)" fill="#fff" opacity="0.35" />
+      </svg>
+      <div style={{
+        position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+        color: p > 0.5 ? "#fff" : C.ink, textShadow: p > 0.5 ? "0 1px 6px rgba(0,0,0,0.25)" : "none", pointerEvents: "none",
+      }}>{children}</div>
+    </div>
+  );
+}
+
+/* ============ GRÁFICOS (SVG liviano, tocá una barra/punto para ver el valor) ============ */
+function BarChart({ data, unit = "", height = 150, color, refLine, refLabel, fmt = (v) => v }) {
+  const [sel, setSel] = useState(null);
+  const W = 320, H = height, padT = 18, padB = 22;
+  const vals = data.map((d) => d.value || 0);
+  const max = Math.max(1, ...vals, refLine || 0) * 1.12;
+  const bw = W / Math.max(1, data.length);
+  const barW = Math.min(34, bw - 6);
+  const y = (v) => padT + (H - padT - padB) * (1 - v / max);
+  const shown = sel ?? data.length - 1;
+  return (
+    <div>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: H, display: "block", overflow: "visible" }}>
+        <line x1="0" x2={W} y1={H - padB} y2={H - padB} stroke={C.line} strokeWidth="1" />
+        {refLine > 0 && (
+          <g>
+            <line x1="0" x2={W} y1={y(refLine)} y2={y(refLine)} stroke={C.sub} strokeWidth="1" strokeDasharray="4 4" />
+            {refLabel && <text x={W} y={y(refLine) - 4} textAnchor="end" fontSize="10" fill={C.sub} fontWeight="700">{refLabel}</text>}
+          </g>
+        )}
+        {data.map((d, i) => {
+          const x = i * bw + (bw - barW) / 2;
+          const v = d.value || 0;
+          const top = y(v), base = H - padB;
+          const r = Math.min(4, (base - top) / 2);
+          return (
+            <g key={i} onClick={() => setSel(i)} style={{ cursor: "pointer" }}>
+              <rect x={i * bw} y={0} width={bw} height={H} fill="transparent" />
+              {v > 0 && (
+                <path d={`M${x},${base} L${x},${top + r} Q${x},${top} ${x + r},${top} L${x + barW - r},${top} Q${x + barW},${top} ${x + barW},${top + r} L${x + barW},${base} Z`}
+                  fill={d.color || color || C.primary} opacity={shown === i ? 1 : 0.55} />
+              )}
+              <text x={i * bw + bw / 2} y={H - 6} textAnchor="middle" fontSize="10" fill={shown === i ? C.ink : C.sub} fontWeight="700">{d.label}</text>
+            </g>
+          );
+        })}
+      </svg>
+      {data[shown] && (
+        <div style={{ fontSize: 12.5, color: C.sub, fontWeight: 600, marginTop: 4, textAlign: "center" }}>
+          <b style={{ color: C.ink }}>{data[shown].title || data[shown].label}</b> · {fmt(data[shown].value || 0)} {unit}{data[shown].note ? ` · ${data[shown].note}` : ""}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* Líneas sobre un mismo eje (mismas unidades). series = [{ name, color, points: [{ x: "YYYY-MM-DD", y }] }] */
+function TrendChart({ series, unit = "", height = 150 }) {
+  const [sel, setSel] = useState(null);
+  const W = 320, H = height, padT = 14, padB = 22, padL = 4, padR = 4;
+  const xs = [...new Set(series.flatMap((s) => s.points.map((p) => p.x)))].sort();
+  const ys = series.flatMap((s) => s.points.map((p) => p.y));
+  if (xs.length < 2) return <div style={{ fontSize: 13, color: C.sub, padding: "8px 0" }}>Hacen falta al menos 2 registros para ver la evolución.</div>;
+  const lo = Math.min(...ys), hi = Math.max(...ys);
+  const span = hi - lo || 1;
+  const t0 = new Date(xs[0]).getTime(), t1 = new Date(xs[xs.length - 1]).getTime();
+  const px = (x) => padL + ((new Date(x).getTime() - t0) / (t1 - t0 || 1)) * (W - padL - padR);
+  const py = (v) => padT + (H - padT - padB) * (1 - (v - lo + span * 0.1) / (span * 1.2));
+  const shownX = sel ?? xs[xs.length - 1];
+  return (
+    <div>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: H, display: "block", overflow: "visible" }}>
+        <line x1="0" x2={W} y1={H - padB} y2={H - padB} stroke={C.line} />
+        <line x1={px(shownX)} x2={px(shownX)} y1={padT - 6} y2={H - padB} stroke={C.line} strokeWidth="1" />
+        {series.map((s) => (
+          <g key={s.name}>
+            <polyline fill="none" stroke={s.color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+              points={s.points.map((p) => `${px(p.x)},${py(p.y)}`).join(" ")} />
+            {s.points.map((p) => (
+              <circle key={p.x} cx={px(p.x)} cy={py(p.y)} r={p.x === shownX ? 4.5 : 3} fill={s.color} stroke={C.card} strokeWidth="2" />
+            ))}
+          </g>
+        ))}
+        {xs.map((x, i) => {
+          const a = i === 0 ? px(x) : (px(xs[i - 1]) + px(x)) / 2;
+          const b = i === xs.length - 1 ? px(x) : (px(x) + px(xs[i + 1])) / 2;
+          return <rect key={x} x={a - (i === 0 ? 8 : 0)} y={0} width={b - a + (i === 0 || i === xs.length - 1 ? 8 : 0)} height={H} fill="transparent" onClick={() => setSel(x)} style={{ cursor: "pointer" }} />;
+        })}
+        <text x={2} y={H - 6} fontSize="10" fill={C.sub} fontWeight="700">{xs[0].slice(5).split("-").reverse().join("/")}</text>
+        <text x={W - 2} y={H - 6} textAnchor="end" fontSize="10" fill={C.sub} fontWeight="700">{xs[xs.length - 1].slice(5).split("-").reverse().join("/")}</text>
+      </svg>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, justifyContent: "center", fontSize: 12.5, fontWeight: 600, color: C.sub, marginTop: 4 }}>
+        <span style={{ color: C.ink, fontWeight: 800 }}>{shownX.slice(5).split("-").reverse().join("/")}</span>
+        {series.map((s) => {
+          const p = s.points.find((q) => q.x === shownX);
+          return (
+            <span key={s.name} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+              <span style={{ width: 10, height: 10, borderRadius: 3, background: s.color }} />
+              {s.name}: <b style={{ color: C.ink }}>{p ? `${p.y}${unit}` : "–"}</b>
+            </span>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* Trazado de una salida (lat/lon → plano). points = [[lat, lon], ...] */
+function RouteSvg({ points, height = 180, live }) {
+  if (!points || points.length < 2) {
+    return (
+      <div style={{ height, borderRadius: 14, background: C.soft, display: "flex", alignItems: "center", justifyContent: "center", color: C.sub, fontSize: 13, fontWeight: 600, gap: 6 }}>
+        <MapPin size={15} /> {live ? "Esperando señal de GPS…" : "Sin recorrido"}
+      </div>
+    );
+  }
+  const lat0 = points[0][0] * Math.PI / 180;
+  const xy = points.map(([la, lo]) => [lo * Math.cos(lat0), -la]);
+  const xsA = xy.map((p) => p[0]), ysA = xy.map((p) => p[1]);
+  const minX = Math.min(...xsA), maxX = Math.max(...xsA), minY = Math.min(...ysA), maxY = Math.max(...ysA);
+  const W = 320, H = height, pad = 14;
+  const sc = Math.min((W - 2 * pad) / (maxX - minX || 1e-9), (H - 2 * pad) / (maxY - minY || 1e-9));
+  const ox = (W - (maxX - minX) * sc) / 2, oy = (H - (maxY - minY) * sc) / 2;
+  const P = xy.map(([x, y]) => [ox + (x - minX) * sc, oy + (y - minY) * sc]);
+  const last = P[P.length - 1];
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height, display: "block", borderRadius: 14, background: C.soft }}>
+      <polyline fill="none" stroke={C.primary} strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" points={P.map((p) => p.join(",")).join(" ")} />
+      <circle cx={P[0][0]} cy={P[0][1]} r="5" fill={C.green} stroke={C.card} strokeWidth="2" />
+      <circle cx={last[0]} cy={last[1]} r="6" fill={live ? C.amber : C.red} stroke={C.card} strokeWidth="2" />
+    </svg>
+  );
+}
+
 /* ============ MAPA MUSCULAR ============ */
-function BodyMap({ side, selected, onSelect }) {
+function BodyMap({ side, selected, onSelect, heat }) {
   const sel = (id) => selected === id;
   const P = (id) => ({
-    fill: sel(id) ? C.accent : C.primary,
-    opacity: sel(id) ? 1 : 0.55,
+    fill: heat ? (heat[id] || C.line) : sel(id) ? C.accent : C.primary,
+    opacity: heat ? (sel(id) ? 1 : 0.85) : sel(id) ? 1 : 0.55,
     cursor: "pointer",
     stroke: sel(id) ? C.ink : "none",
     strokeWidth: 1.5,
@@ -1195,6 +1371,22 @@ export default function App() {
   const [showCalc, setShowCalc] = useState(false);
   const [showChat, setShowChat] = useState(false);
   const [bonusSel, setBonusSel] = useState(null); // lección de Bonus abierta (null = la de hoy)
+  const [loadView, setLoadView] = useState("ejercicios"); // Gym → Músculos: ejercicios | saturacion | volumen
+  // Running: salida en curso con GPS. Se guarda en localStorage para no perderla si se recarga la app.
+  const [runLive, setRunLive] = useState(() => {
+    try {
+      const r = JSON.parse(localStorage.getItem(RUN_LIVE_KEY) || "null");
+      return r ? { ...r, status: "paused", segStart: null, gap: true } : null;
+    } catch (e) { return null; }
+  });
+  const [, setRunTick] = useState(0);
+  const [gpsInfo, setGpsInfo] = useState(null); // { acc, err }
+  const [runManual, setRunManual] = useState({ km: "", min: "" });
+  const [runOpen, setRunOpen] = useState(null); // id de salida expandida en el historial
+  const [runPlanDraft, setRunPlanDraft] = useState(null); // edición del plan
+  const watchRef = useRef(null);
+  const wakeRef = useRef(null);
+  const runSaveRef = useRef(0);
   const [menuOpen, setMenuOpen] = useState(false);
   const [kbInset, setKbInset] = useState(0); // alto del teclado en iOS (visualViewport)
   const swipeRef = useRef({ x: 0, y: 0 });
@@ -1237,7 +1429,12 @@ export default function App() {
           : savedAccs;
         return {
           ...prev, ...s,
-          goals: { ...prev.goals, ...(s.goals || {}) },
+          goals: { ...prev.goals, ...(s.goals || {}), waterMl: (s.goals && s.goals.waterMl) || ((s.goals && s.goals.water) ? s.goals.water * 250 : prev.goals.waterMl) },
+          // Agua: pasa de "hábito + vasos" a ml en la pestaña Salud
+          waterLog: s.waterLog || Object.fromEntries(Object.entries(s.water || {}).filter(([, n]) => n > 0)
+            .map(([d, n]) => [d, [{ id: uid(), ml: n * 250, t: d + "T12:00" }]])),
+          habits: s.waterV ? (s.habits || prev.habits) : (s.habits || prev.habits).filter((h) => !/agua/i.test(h.name)),
+          waterV: 1,
           finance: { ...prev.finance, ...savedFin, accounts: mergedAccs },
           financeSeedV: initialState.financeSeedV,
           program: progStale ? initialState.program : (s.program || prev.program),
@@ -1330,11 +1527,23 @@ export default function App() {
           }
         });
       }
+      // Ayuno: aviso al empezar y al terminar (dentro del mismo minuto)
+      fastIntervalsNear(state.fasting, now).forEach(({ start, end }) => {
+        [[start, "🕐 Empieza tu ayuno. Hasta las " + `${String(end.getHours()).padStart(2, "0")}:${String(end.getMinutes()).padStart(2, "0")}` + ": solo agua, café o té."],
+          [end, "🍽️ ¡Terminó tu ayuno! Ya podés comer."]].forEach(([at, msg]) => {
+          const key = `fast-${at.getTime()}`;
+          if (now >= at && now - at < 60000 && !firedRef.current[key]) {
+            firedRef.current[key] = true;
+            setBanner(msg);
+            setTimeout(() => setBanner(null), 12000);
+          }
+        });
+      });
     };
     const iv = setInterval(check, 20000);
     check();
     return () => clearInterval(iv);
-  }, [state.reminders, state.schedule, state.agendaAlerts]);
+  }, [state.reminders, state.schedule, state.agendaAlerts, state.fasting]);
 
   /* Temporizador anclado a la hora de fin: aunque iOS congele el JS en segundo
      plano, al volver muestra el tiempo real restante (no se atrasa). */
@@ -1775,9 +1984,9 @@ export default function App() {
       up((s) => { s.reminders = [...(s.reminders || []), { id: uid(), text: c.text || "Recordatorio", time: c.time || "18:00", days: Array.isArray(c.days) && c.days.length ? c.days : [0, 1, 2, 3, 4, 5, 6] }]; return s; });
       flash(`🤖 NEXO agregó un recordatorio: ${c.text || ""}`);
     } else if (c.type === "water_add") {
-      const n = Math.max(1, Math.min(20, Number(c.n) || 1));
-      up((s) => { s.water[today] = (s.water[today] || 0) + n; return s; });
-      flash(`🤖 NEXO sumó ${n} vaso${n > 1 ? "s" : ""} de agua 💧`);
+      const ml = Math.max(50, Math.min(3000, Number(c.ml) || (Math.max(1, Math.min(20, Number(c.n) || 1)) * 250)));
+      addWater(ml);
+      flash(`🤖 NEXO sumó ${ml} ml de agua 💧`);
     } else if (c.type === "weight_set") {
       const kg = Number(String(c.kg).replace(",", "."));
       if (kg > 0) { up((s) => { s.weightLog[today] = kg; return s; }); flash(`🤖 NEXO registró tu peso: ${kg} kg`); }
@@ -1973,7 +2182,9 @@ export default function App() {
   const mealsToday = state.meals[today] || [];
   const sumM = (k) => mealsToday.reduce((a, m) => a + (Number(m[k]) || 0), 0);
   const kcal = sumM("kcal"), prot = sumM("protein"), carbs = sumM("carbs"), fat = sumM("fat");
-  const water = state.water[today] || 0;
+  const waterToday = (state.waterLog || {})[today] || [];
+  const water = waterToday.reduce((a, e) => a + (Number(e.ml) || 0), 0); // ml de hoy
+  const waterGoal = Number(state.goals.waterMl) || 2000;
 
   const weightEntriesAll = Object.entries(state.weightLog).sort((a, b) => a[0].localeCompare(b[0]));
   const bodyWeight = weightEntriesAll.length ? Number(weightEntriesAll[weightEntriesAll.length - 1][1]) : 0;
@@ -1991,7 +2202,7 @@ export default function App() {
   const cutMissions = cut ? [
     { id: "meal", auto: true, text: "Registrá tus comidas de hoy", done: mealsToday.length > 0 },
     { id: "prot", auto: true, text: `Llegá a ${state.goals.protein} g de proteína`, done: prot >= state.goals.protein },
-    { id: "water", auto: true, text: "Completá tu meta de agua", done: water >= state.goals.water },
+    { id: "water", auto: true, text: "Completá tu meta de agua", done: water >= waterGoal },
     ...(exTotal > 0 ? [{ id: "train", auto: true, text: "Completá el entreno de hoy", done: exDone >= exTotal }] : []),
     ...(cutPhaseIdx >= 1 ? [
       { id: "weigh", auto: true, text: "Pesate hoy (siempre a la misma hora)", done: !!state.weightLog[today] },
@@ -2035,7 +2246,7 @@ export default function App() {
           entrenoHoy: (state.sessionLog[today] || []).length > 0,
           split: (currentProgWeek?.days || []).map((d) => d.name).filter(Boolean),
         },
-        agua: { hoy: water, meta: state.goals.water },
+        agua: { hoyMl: water, metaMl: waterGoal },
         nutricion: { kcal, kcalMeta: state.goals.kcal, proteina: prot, proteinaMeta: state.goals.protein, carbs, grasa: fat, comidas: mealsToday.length },
         habitos: habitsToday.map((h) => ({ nombre: h.name, hecho: !!h.history[today] })),
         materias: subjects.map((m) => ({
@@ -2103,9 +2314,9 @@ export default function App() {
     const parts = [];
     if (habitsToday.length) parts.push(habitsDone / habitsToday.length);
     if (exTotal) parts.push(exDone / exTotal);
-    parts.push(Math.min(1, water / state.goals.water));
+    parts.push(Math.min(1, water / waterGoal));
     return parts.reduce((a, b) => a + b, 0) / parts.length;
-  }, [habitsDone, habitsToday.length, exDone, exTotal, water, state.goals.water]);
+  }, [habitsDone, habitsToday.length, exDone, exTotal, water, waterGoal]);
 
   const streak = (h) => {
     let s = 0;
@@ -2141,7 +2352,7 @@ export default function App() {
     { Icon: Zap, name: "Imparable", desc: "30 días de racha en un hábito", done: bestStreak >= 30 },
     { Icon: Dumbbell, name: "Habitué", desc: "10 entrenamientos registrados", done: totalWorkouts >= 10 },
     { Icon: Trophy, name: "Máquina", desc: "50 entrenamientos registrados", done: totalWorkouts >= 50 },
-    { Icon: Droplet, name: "Hidratado", desc: "Meta de agua cumplida hoy", done: water >= state.goals.water },
+    { Icon: Droplet, name: "Hidratado", desc: "Meta de agua cumplida hoy", done: water >= waterGoal },
     { Icon: TrendingUp, name: "Bajo control", desc: "Registrá tu peso 7 días", done: Object.keys(state.weightLog).length >= 7 },
     { Icon: Apple, name: "Nutrición al día", desc: "Registrá 20 comidas", done: Object.values(state.meals).flat().length >= 20 },
     { Icon: Target, name: "Modo Cut", desc: "Empezá el Plan Cut", done: !!cut },
@@ -2163,7 +2374,9 @@ export default function App() {
       } else {
         const maxWeight = Math.max(0, ...ex.sets.map((st) => Number(st.weight) || 0));
         s.workoutLog[today][ex.id] = true;
-        s.sessionLog[today].push({ id: ex.id, name: ex.name, setsCount: ex.sets.length, tonnage: tonnage(ex) });
+        // workSets = series realmente cargadas (con reps); alimenta el análisis de carga muscular
+        const workSets = ex.sets.filter((st) => Number(st.reps) > 0).length;
+        s.sessionLog[today].push({ id: ex.id, name: ex.name, setsCount: ex.sets.length, workSets, tonnage: tonnage(ex) });
         s.exerciseHistory[ex.name] = s.exerciseHistory[ex.name] || [];
         if (!s.exerciseHistory[ex.name].some((x) => x.date === today))
           s.exerciseHistory[ex.name].push({ date: today, weight: maxWeight });
@@ -2266,7 +2479,7 @@ export default function App() {
             <div style={{ flex: 1, display: "grid", gap: 10 }}>
               <MiniStat label="Hábitos" value={`${habitsDone}/${habitsToday.length}`} color={C.primary} />
               <MiniStat label="Gym" value={exTotal ? `${exDone}/${exTotal}` : "Descanso"} color={C.accent} />
-              <MiniStat label="Agua" value={`${water}/${state.goals.water}`} color={C.blue} />
+              <MiniStat label="Agua" value={`${(water / 1000).toFixed(1)}/${(waterGoal / 1000).toFixed(1)} L`} color={C.blue} />
             </div>
           </div>
         </div>
@@ -2325,21 +2538,22 @@ export default function App() {
           ))}
         </Card>
 
-        <SectionTitle>Agua</SectionTitle>
+        <SectionTitle right={<Btn kind="ghost" small onClick={() => setTab("salud")}>Salud →</Btn>}>Agua{fasting.windows.length ? " y ayuno" : ""}</SectionTitle>
         <Card>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
-            {Array.from({ length: state.goals.water }).map((_, i) => (
-              <div key={i} onClick={() => up((s) => { s.water[today] = i + 1 === water ? i : i + 1; return s; })}
-                style={{
-                  width: 34, height: 42, borderRadius: 10, cursor: "pointer",
-                  background: i < water ? C.blue : C.blueSoft,
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                }}>
-                {i < water ? <Droplet size={17} color="#fff" fill="#fff" /> : null}
+          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            <WaterSphere pct={water / waterGoal} size={104}>
+              <div style={{ fontSize: 17, fontWeight: 900 }}>{Math.round((water / waterGoal) * 100)}%</div>
+            </WaterSphere>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 17, fontWeight: 800 }}>{water.toLocaleString("es-AR")} <span style={{ fontSize: 13, color: C.sub, fontWeight: 600 }}>/ {waterGoal.toLocaleString("es-AR")} ml</span></div>
+              <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                {[250, 500].map((ml) => <Btn key={ml} kind="soft" small onClick={() => addWater(ml)}>+{ml}</Btn>)}
               </div>
-            ))}
+            </div>
           </div>
-          <div style={{ fontSize: 13, color: C.sub, fontWeight: 500 }}>Tocá un vaso para registrar.</div>
+          {fasting.windows.length > 0 && (
+            <div style={{ borderTop: `1px solid ${C.line}`, marginTop: 12, paddingTop: 10 }}><FastCard compact /></div>
+          )}
         </Card>
 
         {currentProgDay && currentProgDay.exercises.length > 0 && (
@@ -2395,6 +2609,15 @@ export default function App() {
           <MacroBox label="Carbos" value={carbs} goal={state.goals.carbs} unit="g" color={C.blue} />
           <MacroBox label="Grasas" value={fat} goal={state.goals.fat} unit="g" color={C.red} />
         </Card>
+
+        {runPlan && (
+          <>
+            <SectionTitle right={<Btn kind="ghost" small onClick={() => setTab("correr")}>{runLive ? "Ver salida →" : "Correr →"}</Btn>}>Correr hoy</SectionTitle>
+            <Card>
+              <MacroBox label={runKmToday >= runTarget ? "Meta cumplida ✅" : "Distancia"} value={runKmToday} goal={runTarget} unit="km" color={C.green} />
+            </Card>
+          </>
+        )}
 
         <SectionTitle>Nota del día</SectionTitle>
         <Card>
@@ -3238,12 +3461,137 @@ export default function App() {
   };
 
   /* ============ GYM ============ */
+  /* ---------- Carga muscular: saturación (fatiga) y volumen semanal (hipertrofia) ---------- */
+  const satColor = (v) => (v >= 0.7 ? C.red : v >= 0.3 ? C.amber : C.green);
+  const satLabel = (v) => (v >= 0.7 ? "Saturado" : v >= 0.3 ? "Recuperando" : "Listo");
+  const volStatus = (v) =>
+    v < VOLUME.mev ? { t: "Poco estímulo", c: C.sub }
+      : v < VOLUME.mavLo ? { t: "Creciendo", c: C.amberInk }
+        : v <= VOLUME.mavHi ? { t: "Óptimo", c: C.green }
+          : v <= VOLUME.mrv ? { t: "Alto", c: C.amberInk }
+            : { t: "Excesivo", c: C.red };
+
+  function CargaMuscular() {
+    const sat = saturation(state.sessionLog, state.running?.runs, new Date());
+    const muscles = mapSide === "front" ? FRONT_MUSCLES : BACK_MUSCLES;
+    const heat = Object.fromEntries(Object.entries(sat).map(([m, v]) => [m, satColor(v)]));
+    const weeks = [3, 2, 1, 0].map((o) => weeklySets(state.sessionLog, today, o));
+    const cur = weeks[3];
+    // La rutina tiene N días de entreno por "semana" del programa; la escalamos a tus días reales de gym.
+    const gymDays = new Set((state.schedule || []).filter((e) => e.who === "yo" && /gym/i.test(e.title)).map((e) => e.day)).size || 4;
+    const progDays = (currentProgWeek?.days || []).length || 1;
+    const planned = plannedSets(currentProgWeek);
+    const plannedWk = (m) => Math.round((planned[m] || 0) * Math.min(1, gymDays / progDays));
+    const allM = [...new Set([...FRONT_MUSCLES, ...BACK_MUSCLES])];
+    const r1 = (v) => Math.round(v * 10) / 10;
+    const sel = muscle && sat[muscle] != null ? muscle : null;
+    const hoursToReady = (v) => (v <= 0.3 ? 0 : Math.ceil(36 * Math.log(v / 0.3)));
+
+    if (loadView === "saturacion") {
+      return (
+        <>
+          <Card>
+            <div style={{ marginBottom: 12 }}>
+              <Segmented options={[["front", "Frente"], ["back", "Espalda"]]} value={mapSide} onChange={(id) => { setMapSide(id); setMuscle(null); }} />
+            </div>
+            <BodyMap side={mapSide} selected={sel} heat={heat} onSelect={(m) => setMuscle(m === muscle ? null : m)} />
+            <div style={{ display: "flex", gap: 14, justifyContent: "center", marginTop: 10, fontSize: 12, fontWeight: 700, color: C.sub }}>
+              {[["Listo", C.green], ["Recuperando", C.amber], ["Saturado", C.red]].map(([l, c]) => (
+                <span key={l} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                  <span style={{ width: 10, height: 10, borderRadius: 3, background: c }} />{l}
+                </span>
+              ))}
+            </div>
+            {sel && (
+              <div style={{ background: C.soft, borderRadius: 12, padding: 12, marginTop: 12, fontSize: 13.5, fontWeight: 600, lineHeight: 1.45 }}>
+                <b>{EXDB[sel].label}</b>: {Math.round(sat[sel] * 100)} % de saturación · {satLabel(sat[sel])}.{" "}
+                {hoursToReady(sat[sel]) > 0 ? `Listo para entrenarlo fuerte en ~${hoursToReady(sat[sel])} h.` : "Podés entrenarlo fuerte hoy."}
+              </div>
+            )}
+          </Card>
+          <SectionTitle>Saturación por músculo</SectionTitle>
+          <Card style={{ padding: "8px 14px" }}>
+            {muscles.slice().sort((a, b) => sat[b] - sat[a]).map((m) => (
+              <div key={m} onClick={() => setMuscle(m)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0", cursor: "pointer" }}>
+                <div style={{ width: 86, fontSize: 13, fontWeight: 700 }}>{EXDB[m].label}</div>
+                <div style={{ flex: 1, height: 8, borderRadius: 4, background: C.line, overflow: "hidden" }}>
+                  <div style={{ width: `${Math.max(2, sat[m] * 100)}%`, height: "100%", borderRadius: 4, background: satColor(sat[m]) }} />
+                </div>
+                <div style={{ width: 92, textAlign: "right", fontSize: 12, fontWeight: 700, color: C.sub }}>{Math.round(sat[m] * 100)} % · {satLabel(sat[m])}</div>
+              </div>
+            ))}
+          </Card>
+          <div style={{ fontSize: 12, color: C.sub, lineHeight: 1.45, margin: "8px 4px 0" }}>
+            Se calcula con los ejercicios que marcás como hechos (y tus salidas a correr, para piernas). Cada serie suma fatiga que se va recuperando en ~48–72 h. Es una estimación: si te sentís cargado, hacé caso a tu cuerpo.
+          </div>
+        </>
+      );
+    }
+
+    // Volumen semanal (estímulo de hipertrofia)
+    const rows = allM.map((m) => ({ m, v: r1(cur[m] || 0), p: plannedWk(m), hist: weeks.map((w) => r1(w[m] || 0)) }))
+      .sort((a, b) => b.v - a.v || b.p - a.p);
+    const maxV = Math.max(VOLUME.mrv + 2, ...rows.map((r) => Math.max(r.v, r.p)));
+    const X = (v) => `${(v / maxV) * 100}%`;
+    const optimos = rows.filter((r) => r.v >= VOLUME.mavLo && r.v <= VOLUME.mavHi).length;
+    return (
+      <>
+        <Card>
+          <div style={{ fontSize: 12, fontWeight: 800, color: C.sub, letterSpacing: 0.4 }}>ESTÍMULO DE HIPERTROFIA · ÚLTIMOS 7 DÍAS</div>
+          <div style={{ fontSize: 22, fontWeight: 800, margin: "4px 0 2px" }}>{optimos} de {allM.length} músculos en zona óptima</div>
+          <div style={{ fontSize: 12.5, color: C.sub, fontWeight: 600, lineHeight: 1.45 }}>
+            Series efectivas por semana (los secundarios cuentan a medias). Zona óptima para crecer: {VOLUME.mavLo}–{VOLUME.mavHi} series. Menos de {VOLUME.mev} casi no estimula; más de {VOLUME.mrv} cuesta recuperarse.
+          </div>
+        </Card>
+        <SectionTitle>Series por músculo</SectionTitle>
+        <Card style={{ padding: "10px 14px" }}>
+          <div style={{ display: "flex", gap: 14, fontSize: 11.5, fontWeight: 700, color: C.sub, marginBottom: 6, flexWrap: "wrap" }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: C.primary }} />Hecho</span>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 2, height: 12, background: C.ink }} />Tu rutina (hecho / rutina)</span>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 14, height: 10, borderRadius: 3, background: C.greenSoft }} />Zona óptima</span>
+          </div>
+          {rows.map((r) => {
+            const st = volStatus(r.v);
+            return (
+              <div key={r.m} style={{ padding: "7px 0", borderTop: `1px solid ${C.line}` }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 8, fontSize: 13, fontWeight: 700, marginBottom: 5 }}>
+                  <span style={{ flex: 1, minWidth: 0 }}>{EXDB[r.m].label.split(" (")[0]} <span style={{ color: st.c, fontSize: 11.5, fontWeight: 800 }}>{st.t}</span></span>
+                  <span style={{ color: C.sub, fontWeight: 600, fontSize: 12, whiteSpace: "nowrap" }}><b style={{ color: C.ink }}>{r.v}</b>{r.p ? ` / ${r.p}` : ""} series</span>
+                </div>
+                <div style={{ position: "relative", height: 10, borderRadius: 5, background: C.line }}>
+                  <div style={{ position: "absolute", left: X(VOLUME.mavLo), width: `calc(${X(VOLUME.mavHi)} - ${X(VOLUME.mavLo)})`, top: 0, bottom: 0, background: C.greenSoft }} />
+                  <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: X(r.v), borderRadius: 5, background: C.primary }} />
+                  {r.p > 0 && <div style={{ position: "absolute", left: X(r.p), top: -3, bottom: -3, width: 2, background: C.ink, borderRadius: 1 }} />}
+                </div>
+                <div style={{ display: "flex", gap: 3, alignItems: "flex-end", height: 16, marginTop: 5 }} title="Últimas 4 semanas">
+                  <span style={{ fontSize: 10.5, color: C.sub, fontWeight: 600, marginRight: 4 }}>4 sem:</span>
+                  {r.hist.map((h, i) => (
+                    <div key={i} style={{ width: 12, height: Math.max(2, (h / maxV) * 16), borderRadius: 2, background: i === 3 ? C.primary : C.sub, opacity: i === 3 ? 1 : 0.4 }} />
+                  ))}
+                  <span style={{ fontSize: 10.5, color: C.sub, fontWeight: 600, marginLeft: 4 }}>{r.hist.join(" · ")}</span>
+                </div>
+              </div>
+            );
+          })}
+        </Card>
+        <div style={{ fontSize: 12, color: C.sub, lineHeight: 1.45, margin: "8px 4px 0" }}>
+          Para que cuente bien, cargá las reps de cada serie antes de marcar el ejercicio como hecho. Si no hay reps cargadas, se toman las series del nombre (ej: "3x8-10"). La rutina se escala a tus {gymDays} días de gym por semana de la Agenda.
+        </div>
+      </>
+    );
+  }
+
   function Musculos() {
     const muscles = mapSide === "front" ? FRONT_MUSCLES : BACK_MUSCLES;
     const md = muscle ? EXDB[muscle] : null;
 
     return (
       <>
+        <div style={{ marginBottom: 12 }}>
+          <Segmented options={[["ejercicios", "Ejercicios"], ["saturacion", "Saturación"], ["volumen", "Hipertrofia"]]} value={loadView} onChange={(v) => { setLoadView(v); setMuscle(null); setOpenLift(null); }} />
+        </div>
+        {loadView !== "ejercicios" ? CargaMuscular() : (
+        <>
         <Card>
           <div style={{ marginBottom: 12 }}>
             <Segmented
@@ -3354,6 +3702,8 @@ export default function App() {
               );
             })}
           </>
+        )}
+        </>
         )}
       </>
     );
@@ -3727,9 +4077,568 @@ export default function App() {
     );
   }
 
+  /* ============ SALUD: agua (esfera en ml) + horarios de ayuno ============ */
+  const [waterCustom, setWaterCustom] = useState("");
+  const [fastEdit, setFastEdit] = useState(false); // los horarios de ayuno se editan solo tras confirmar con tu PIN
+  const [fastPin, setFastPin] = useState(null);    // null = no se está pidiendo PIN; string = PIN tipeado
+  const [, setClockTick] = useState(0);
+  useEffect(() => {
+    if (tab !== "salud" && tab !== "hoy") return;
+    const iv = setInterval(() => setClockTick((x) => x + 1), 30000);
+    return () => clearInterval(iv);
+  }, [tab]);
+
+  const addWater = (ml) => up((s) => {
+    s.waterLog = s.waterLog || {};
+    s.waterLog[today] = [...(s.waterLog[today] || []), { id: uid(), ml, t: new Date().toISOString() }];
+    return s;
+  });
+  const removeWater = (id) => up((s) => {
+    s.waterLog[today] = (s.waterLog[today] || []).filter((e) => e.id !== id);
+    return s;
+  });
+  const setWaterGoal = (ml) => up((s) => { s.goals.waterMl = Math.max(500, Math.min(6000, Math.round(ml / 50) * 50)); return s; });
+
+  const fasting = state.fasting || { windows: [] };
+  const fastNow = fastStatus(fasting.windows, new Date());
+  const hhmm = (d) => `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  const durTxt = (ms) => { const m = Math.max(0, Math.round(ms / 60000)); return m >= 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m} min`; };
+  const dayTxt = (d) => {
+    const diff = Math.round((new Date(dstr(d) + "T00:00:00") - new Date(today + "T00:00:00")) / 86400000);
+    return diff === 0 ? "hoy" : diff === 1 ? "mañana" : DAY_NAMES[d.getDay()].toLowerCase();
+  };
+  const setFastWindows = (fn) => up((s) => { s.fasting = s.fasting || { windows: [] }; s.fasting.windows = fn(s.fasting.windows || []); return s; });
+
+  const unlockFastEdit = async () => {
+    let stored = null;
+    try { stored = localStorage.getItem(PIN_KEY); } catch (e) { /* sin storage */ }
+    if (!stored) { setFastEdit(true); return; }
+    if (fastPin == null) { setFastPin(""); return; }
+    if ((await hashPin(fastPin)) === stored) { setFastEdit(true); setFastPin(null); }
+    else { flash("PIN incorrecto"); setFastPin(""); }
+  };
+
+  function FastCard({ compact }) {
+    if (!fasting.windows.length) {
+      return compact ? null : <Empty text="Todavía no agendaste horarios de ayuno." />;
+    }
+    const a = fastNow.active, n = fastNow.next;
+    if (a) {
+      const pct = (Date.now() - a.start) / (a.end - a.start);
+      return (
+        <div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 800, fontSize: 15 }}>
+            <Hourglass size={17} color={C.amber} /> En ayuno · llevás {durTxt(Date.now() - a.start)}
+          </div>
+          <div style={{ fontSize: 13, color: C.sub, fontWeight: 600, margin: "4px 0 8px" }}>
+            Termina {dayTxt(a.end)} a las <b style={{ color: C.ink }}>{hhmm(a.end)}</b> (faltan {durTxt(a.end - Date.now())}) · solo agua, café o té sin azúcar
+          </div>
+          <div style={{ height: 8, borderRadius: 4, background: C.line, overflow: "hidden" }}>
+            <div style={{ width: `${Math.min(100, pct * 100)}%`, height: "100%", background: C.amber, borderRadius: 4 }} />
+          </div>
+        </div>
+      );
+    }
+    return (
+      <div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 800, fontSize: 15 }}>
+          🍽️ Ventana para comer
+        </div>
+        {n && (
+          <div style={{ fontSize: 13, color: C.sub, fontWeight: 600, marginTop: 4 }}>
+            Próximo ayuno: {dayTxt(n.start)} a las <b style={{ color: C.ink }}>{hhmm(n.start)}</b> (en {durTxt(n.start - Date.now())}) · {fastHours(n.w)} h
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  function Salud() {
+    const pct = water / waterGoal;
+    const left = Math.max(0, waterGoal - water);
+    const last7 = lastNDays(7).map((d) => {
+      const k = dstr(d);
+      const ml = ((state.waterLog || {})[k] || []).reduce((a, e) => a + (Number(e.ml) || 0), 0);
+      return { label: DAYS[d.getDay()], title: fmtDate(k), value: ml };
+    });
+    const ib = { display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6 };
+    const PRESETS = [["16:8", "20:00", "12:00"], ["14:10", "20:00", "10:00"], ["18:6", "18:00", "12:00"]];
+    return (
+      <>
+        <PageHeader title="Salud" subtitle="Agua y ayuno" />
+
+        <Card>
+          <WaterSphere pct={pct} size={230}>
+            <div style={{ fontSize: 34, fontWeight: 900, letterSpacing: -1.2, fontVariantNumeric: "tabular-nums" }}>{water.toLocaleString("es-AR")}</div>
+            <div style={{ fontSize: 13, fontWeight: 700, opacity: 0.85 }}>de {waterGoal.toLocaleString("es-AR")} ml · {Math.round(pct * 100)} %</div>
+          </WaterSphere>
+          <div style={{ textAlign: "center", fontSize: 13.5, fontWeight: 700, color: left ? C.sub : C.green, margin: "10px 0 14px" }}>
+            {left ? `Te faltan ${left.toLocaleString("es-AR")} ml` : "💧 ¡Meta de agua cumplida!"}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
+            {[250, 500, 750, 1000].map((ml, i) => (
+              <button key={ml} onClick={() => addWater(ml)} style={{
+                border: "none", borderRadius: 14, padding: "10px 0 8px", cursor: "pointer", fontFamily: FONT,
+                background: C.blueSoft, color: C.theme === "dark" ? C.blue : C.primaryInk,
+                display: "flex", flexDirection: "column", alignItems: "center", gap: 3, fontWeight: 800, fontSize: 13,
+              }}
+                onPointerDown={(e) => { e.currentTarget.style.transform = "scale(0.92)"; }}
+                onPointerUp={(e) => { e.currentTarget.style.transform = "scale(1)"; }}
+                onPointerLeave={(e) => { e.currentTarget.style.transform = "scale(1)"; }}>
+                <Droplet size={14 + i * 4} fill="currentColor" />
+                {ml >= 1000 ? "1 L" : `${ml} ml`}
+              </button>
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+            <Input type="number" placeholder="Otra cantidad (ml)" value={waterCustom} onChange={(e) => setWaterCustom(e.target.value)} />
+            <Btn kind="soft" onClick={() => {
+              const ml = Number(waterCustom);
+              if (!(ml > 0 && ml <= 3000)) { flash("Poné una cantidad entre 1 y 3000 ml"); return; }
+              addWater(Math.round(ml)); setWaterCustom("");
+            }}>＋</Btn>
+            {waterToday.length > 0 && (
+              <Btn kind="ghost" style={ib} onClick={() => removeWater(waterToday[waterToday.length - 1].id)} aria-label="Deshacer"><Undo2 size={16} /></Btn>
+            )}
+          </div>
+        </Card>
+
+        <SectionTitle>Meta diaria</SectionTitle>
+        <Card>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <Btn kind="soft" onClick={() => setWaterGoal(waterGoal - 250)}>−</Btn>
+            <div style={{ flex: 1, textAlign: "center" }}>
+              <div style={{ fontSize: 24, fontWeight: 900 }}>{(waterGoal / 1000).toLocaleString("es-AR")} L</div>
+              <div style={{ fontSize: 12, color: C.sub, fontWeight: 600 }}>tu máximo de agua por día</div>
+            </div>
+            <Btn kind="soft" onClick={() => setWaterGoal(waterGoal + 250)}>＋</Btn>
+          </div>
+          {bodyWeight > 0 && (
+            <div style={{ fontSize: 12.5, color: C.sub, fontWeight: 600, marginTop: 10, textAlign: "center" }}>
+              Referencia: ~35 ml por kg → <b style={{ color: C.ink }}>{(Math.round(bodyWeight * 35 / 250) * 250).toLocaleString("es-AR")} ml</b>{" "}
+              <Btn kind="ghost" small onClick={() => setWaterGoal(Math.round(bodyWeight * 35 / 250) * 250)}>Usar</Btn>
+            </div>
+          )}
+        </Card>
+
+        {waterToday.length > 0 && (
+          <>
+            <SectionTitle>Tomas de hoy</SectionTitle>
+            <Card style={{ padding: 8 }}>
+              {[...waterToday].reverse().map((e) => {
+                const t = new Date(e.t);
+                return (
+                  <Row key={e.id} left={<Droplet size={16} color={C.blue} fill={C.blue} />}
+                    title={`${e.ml.toLocaleString("es-AR")} ml`}
+                    sub={Number.isNaN(t.getTime()) ? "" : hhmm(t)}
+                    right={<Btn kind="danger" small onClick={() => removeWater(e.id)}><X size={14} /></Btn>} />
+                );
+              })}
+            </Card>
+          </>
+        )}
+
+        <SectionTitle>Últimos 7 días</SectionTitle>
+        <Card>
+          <BarChart data={last7} unit="ml" color={C.blue} refLine={waterGoal} refLabel={`meta ${waterGoal} ml`} fmt={(v) => v.toLocaleString("es-AR")} />
+        </Card>
+
+        <SectionTitle right={fasting.windows.length > 0 && !fastEdit
+          ? <Btn kind="ghost" small style={ib} onClick={unlockFastEdit}><Lock size={13} /> Editar</Btn> : null}>
+          Ayuno
+        </SectionTitle>
+        <Card>
+          <FastCard />
+          {!fastEdit && fasting.windows.length > 0 && (
+            <div style={{ borderTop: `1px solid ${C.line}`, marginTop: 12, paddingTop: 8 }}>
+              {fasting.windows.map((w) => (
+                <div key={w.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 13.5, fontWeight: 600, padding: "5px 0" }}>
+                  <span style={{ color: C.sub }}>{w.days.length === 7 ? "Todos los días" : [1, 2, 3, 4, 5, 6, 0].filter((d) => w.days.includes(d)).map((d) => DAY_NAMES[d].slice(0, 3)).join(" ")}</span>
+                  <span>{w.start} → {w.end} <span style={{ color: C.sub }}>· {fastHours(w)} h</span></span>
+                </div>
+              ))}
+            </div>
+          )}
+          {!fastEdit && fasting.windows.length === 0 && (
+            <Btn style={{ ...ib, width: "100%", marginTop: 4 }} onClick={unlockFastEdit}><Lock size={14} /> Agendar horarios de ayuno</Btn>
+          )}
+          {fastPin != null && !fastEdit && (
+            <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+              <Input type="password" inputMode="numeric" autoFocus placeholder="Tu PIN para editar" value={fastPin}
+                onChange={(e) => setFastPin(e.target.value.replace(/\D/g, "").slice(0, 8))}
+                onKeyDown={(e) => { if (e.key === "Enter") unlockFastEdit(); }} />
+              <Btn onClick={unlockFastEdit}>OK</Btn>
+              <Btn kind="ghost" onClick={() => setFastPin(null)}><X size={15} /></Btn>
+            </div>
+          )}
+          {fastEdit && (
+            <div style={{ borderTop: `1px solid ${C.line}`, marginTop: 12, paddingTop: 12 }}>
+              <div style={{ fontSize: 12.5, color: C.sub, fontWeight: 600, marginBottom: 8 }}>
+                El ayuno <b>empieza</b> a la primera hora y <b>termina</b> a la segunda (si es más temprano, al día siguiente).
+              </div>
+              {fasting.windows.map((w) => (
+                <div key={w.id} style={{ background: C.soft, borderRadius: 12, padding: 10, marginBottom: 8 }}>
+                  <DayPicker days={w.days} onToggle={(d) => setFastWindows((ws) => ws.map((x) => x.id === w.id
+                    ? { ...x, days: x.days.includes(d) ? x.days.filter((y) => y !== d) : [...x.days, d] } : x))} />
+                  <div style={{ display: "flex", gap: 8, alignItems: "end", marginTop: 8 }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={lblStyle}>Empieza</div>
+                      <Input type="time" value={w.start} onChange={(e) => setFastWindows((ws) => ws.map((x) => x.id === w.id ? { ...x, start: e.target.value } : x))} />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <div style={lblStyle}>Termina</div>
+                      <Input type="time" value={w.end} onChange={(e) => setFastWindows((ws) => ws.map((x) => x.id === w.id ? { ...x, end: e.target.value } : x))} />
+                    </div>
+                    <Btn kind="danger" small onClick={() => setFastWindows((ws) => ws.filter((x) => x.id !== w.id))}><Trash2 size={15} /></Btn>
+                  </div>
+                  <div style={{ fontSize: 12, color: C.sub, fontWeight: 600, marginTop: 6 }}>{w.start && w.end ? `${fastHours(w)} h de ayuno` : ""}</div>
+                </div>
+              ))}
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+                {PRESETS.map(([name, st, en]) => (
+                  <Btn key={name} kind="soft" small onClick={() => setFastWindows((ws) => [...ws, { id: uid(), days: [0, 1, 2, 3, 4, 5, 6], start: st, end: en }])}>＋ {name}</Btn>
+                ))}
+                <Btn kind="soft" small onClick={() => setFastWindows((ws) => [...ws, { id: uid(), days: [1, 2, 3, 4, 5], start: "21:00", end: "13:00" }])}>＋ Personalizado</Btn>
+              </div>
+              <Btn style={{ ...ib, width: "100%" }} onClick={() => { setFastEdit(false); flash("🔒 Horarios de ayuno guardados"); }}><Lock size={14} /> Listo</Btn>
+            </div>
+          )}
+        </Card>
+        <div style={{ fontSize: 12, color: C.sub, lineHeight: 1.45, margin: "8px 4px 0" }}>
+          Los horarios de ayuno solo los cambiás vos desde acá (con tu PIN); NEXO no puede modificarlos. Te aviso cuando empieza y cuando termina cada ayuno.
+        </div>
+      </>
+    );
+  }
+
+  /* ============ CORRER: plan progresivo + registro con GPS ============ */
+  const running = state.running || { plan: null, runs: [] };
+  const runs = running.runs || [];
+  const runPlan = running.plan;
+  const runTarget = runPlan ? runTargetKm(runPlan, today) : 0;
+  const runKmToday = Math.round(runs.filter((r) => r.date === today).reduce((a, r) => a + (r.km || 0), 0) * 100) / 100;
+  const runKcalToday = runs.filter((r) => r.date === today).reduce((a, r) => a + (r.kcal || 0), 0);
+
+  const runActiveMs = (l) => (l ? l.activeMs + (l.status === "running" && l.segStart ? Date.now() - l.segStart : 0) : 0);
+  const liveKm = runLive && runLive.points.length ? runLive.points[runLive.points.length - 1].d : 0;
+
+  const onGps = (pos) => {
+    const { latitude: lat, longitude: lon, accuracy: acc } = pos.coords;
+    setGpsInfo({ acc: Math.round(acc), err: null });
+    setRunLive((l) => {
+      if (!l || l.status !== "running") return l;
+      const t = pos.timestamp || Date.now();
+      const pt = { lat, lon, t, acc };
+      const prev = l.points[l.points.length - 1];
+      if (!acceptPoint(l.gap ? null : prev, pt)) return l;
+      // después de una pausa el primer punto no suma distancia (no "teletransporta")
+      const d = (prev ? prev.d : 0) + (prev && !l.gap ? haversineKm(prev, pt) : 0);
+      return { ...l, gap: false, points: [...l.points, { lat: +lat.toFixed(6), lon: +lon.toFixed(6), t, a: runActiveMs(l), d }] };
+    });
+  };
+  const requestWake = () => {
+    try { navigator.wakeLock?.request("screen").then((w) => { wakeRef.current = w; }).catch(() => {}); } catch (e) { /* sin wake lock */ }
+  };
+  const startWatch = () => {
+    if (!navigator.geolocation) { flash("Este dispositivo no tiene GPS disponible"); return false; }
+    watchRef.current = navigator.geolocation.watchPosition(onGps, (e) => setGpsInfo({
+      acc: null, err: e.code === 1 ? "Permiso de ubicación denegado: habilitalo en Ajustes → Privacidad → Ubicación" : "Buscando señal de GPS…",
+    }), { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
+    requestWake();
+    return true;
+  };
+  const stopWatch = () => {
+    if (watchRef.current != null && navigator.geolocation) navigator.geolocation.clearWatch(watchRef.current);
+    watchRef.current = null;
+    try { wakeRef.current?.release(); } catch (e) { /* ya liberado */ }
+    wakeRef.current = null;
+  };
+  const runStart = () => {
+    if (!startWatch()) return;
+    setGpsInfo(null);
+    setRunLive({ status: "running", startedAt: Date.now(), activeMs: 0, segStart: Date.now(), points: [], gap: false });
+  };
+  const runPause = () => { stopWatch(); setRunLive((l) => ({ ...l, status: "paused", activeMs: runActiveMs(l), segStart: null, gap: true })); };
+  const runResume = () => {
+    if (watchRef.current == null && !startWatch()) return;
+    setRunLive((l) => ({ ...l, status: "running", segStart: Date.now(), gap: true }));
+  };
+  const runDiscard = () => {
+    if (!confirm("¿Descartar esta salida? No se guarda nada.")) return;
+    stopWatch(); setRunLive(null);
+  };
+  const runFinish = () => {
+    const l = runLive;
+    stopWatch();
+    const sec = Math.round(runActiveMs(l) / 1000);
+    const km = Math.round(liveKm * 100) / 100;
+    if (km < 0.05) {
+      if (confirm("Casi no se registró distancia (¿sin señal de GPS?). ¿Descartar la salida?")) { setRunLive(null); return; }
+      setRunLive({ ...l, status: "paused", activeMs: runActiveMs(l), segStart: null, gap: true });
+      return;
+    }
+    const run = {
+      id: uid(), date: dstr(new Date(l.startedAt)), startedAt: l.startedAt, km, sec,
+      splits: computeSplits(l.points.map((p) => ({ t: p.a, d: p.d }))),
+      route: downsample(l.points).map((p) => [p.lat, p.lon]),
+      kcal: runKcal(km, bodyWeight), source: "gps",
+    };
+    up((s) => {
+      s.running = s.running || { plan: null, runs: [] };
+      s.running.runs = [...(s.running.runs || []), run];
+      return s;
+    });
+    setRunLive(null);
+    setRunOpen(run.id);
+    flash(`🏃 Salida guardada: ${km} km en ${fmtDur(sec)} (${fmtPace(sec / km)} /km)`);
+  };
+
+  // Mientras corre: refresco del cronómetro cada segundo y wake lock al volver a la app
+  useEffect(() => {
+    if (runLive?.status !== "running") return;
+    const iv = setInterval(() => setRunTick((x) => x + 1), 1000);
+    const onVis = () => { if (document.visibilityState === "visible") requestWake(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { clearInterval(iv); document.removeEventListener("visibilitychange", onVis); };
+  }, [runLive?.status]);
+  // Si la app se recargó con una salida a medias, queda en pausa: el GPS se retoma al tocar "Seguir".
+  useEffect(() => {
+    try {
+      if (!runLive) { localStorage.removeItem(RUN_LIVE_KEY); return; }
+      if (runLive.status === "running" && Date.now() - runSaveRef.current < 8000) return;
+      runSaveRef.current = Date.now();
+      localStorage.setItem(RUN_LIVE_KEY, JSON.stringify({ ...runLive, activeMs: runActiveMs(runLive), segStart: null }));
+    } catch (e) { /* almacenamiento lleno */ }
+  }, [runLive]);
+
+  const saveRunPlan = (d) => {
+    const p = {
+      startDate: d.startDate || today,
+      startKm: Number(d.startKm) || RUN_DEFAULTS.startKm,
+      stepKm: Number(d.stepKm) || 0,
+      everyDays: Math.max(1, Number(d.everyDays) || RUN_DEFAULTS.everyDays),
+      maxKm: Number(d.maxKm) || 0,
+    };
+    up((s) => { s.running = s.running || { plan: null, runs: [] }; s.running.plan = p; return s; });
+    setRunPlanDraft(null);
+  };
+
+  function Correr() {
+    const info = runPlan ? runLevelInfo(runPlan, today) : null;
+    const pct = runTarget ? Math.min(1, runKmToday / runTarget) : 0;
+    const liveSec = runActiveMs(runLive) / 1000;
+    const pts = runLive ? runLive.points : [];
+    // ritmo del último ~500 m
+    const recentPace = (() => {
+      if (pts.length < 2) return null;
+      const last = pts[pts.length - 1];
+      let j = pts.length - 1;
+      while (j > 0 && last.d - pts[j].d < 0.5) j--;
+      const dd = last.d - pts[j].d;
+      return dd > 0.05 ? (last.a - pts[j].a) / 1000 / dd : null;
+    })();
+    // km por semana (lunes a domingo), últimas 8 semanas
+    const monday = new Date(today + "T00:00:00");
+    monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
+    const weeksKm = Array.from({ length: 8 }, (_, i) => {
+      const a = new Date(monday); a.setDate(a.getDate() - (7 - i) * 7);
+      const b = new Date(a); b.setDate(b.getDate() + 6);
+      const ka = dstr(a), kb = dstr(b);
+      const km = runs.filter((r) => r.date >= ka && r.date <= kb).reduce((s, r) => s + (r.km || 0), 0);
+      return { label: `${a.getDate()}/${a.getMonth() + 1}`, title: `Semana del ${a.getDate()}/${a.getMonth() + 1}`, value: Math.round(km * 10) / 10 };
+    });
+    const totalKm = Math.round(runs.reduce((s, r) => s + (r.km || 0), 0) * 10) / 10;
+    const daysHit = new Set(runs.filter((r) => runPlan && r.date >= runPlan.startDate).map((r) => r.date))
+      .size;
+    const big = { fontSize: 30, fontWeight: 900, letterSpacing: -1, fontVariantNumeric: "tabular-nums", lineHeight: 1.05 };
+    const small = { fontSize: 11.5, fontWeight: 800, color: C.sub, letterSpacing: 0.4 };
+    const draft = runPlanDraft;
+    const ib = { display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6 };
+
+    return (
+      <>
+        <PageHeader title="Correr" subtitle="Running" />
+
+        {(!runPlan || draft) && (
+          <Card style={{ marginBottom: 10 }}>
+            <div style={{ fontWeight: 800, fontSize: 15.5, marginBottom: 4 }}>Plan progresivo</div>
+            <div style={{ fontSize: 13, color: C.sub, lineHeight: 1.45, marginBottom: 10 }}>
+              Arrancás con {draft?.startKm || RUN_DEFAULTS.startKm} km por día y cada {draft?.everyDays || RUN_DEFAULTS.everyDays} días sumás {draft?.stepKm ?? RUN_DEFAULTS.stepKm} km más.
+            </div>
+            {(() => {
+              const d = draft || { startDate: today, ...RUN_DEFAULTS };
+              const set = (k) => (v) => setRunPlanDraft({ ...d, [k]: v });
+              return (
+                <>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+                    <LabeledNum label="Km por día al inicio" value={d.startKm} step={0.5} onChange={set("startKm")} />
+                    <LabeledNum label="Sumar km" value={d.stepKm} step={0.5} onChange={set("stepKm")} />
+                    <LabeledNum label="Cada (días)" value={d.everyDays} onChange={set("everyDays")} />
+                    <LabeledNum label="Tope km (0 = sin tope)" value={d.maxKm} step={0.5} onChange={set("maxKm")} />
+                  </div>
+                  <div style={lblStyle}>Fecha de inicio</div>
+                  <Input type="date" value={d.startDate} onChange={(e) => setRunPlanDraft({ ...d, startDate: e.target.value })} style={{ marginBottom: 10 }} />
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <Btn onClick={() => saveRunPlan(d)}>{runPlan ? "Guardar plan" : "Empezar plan"}</Btn>
+                    {runPlan && <Btn kind="ghost" onClick={() => setRunPlanDraft(null)}>Cancelar</Btn>}
+                  </div>
+                </>
+              );
+            })()}
+          </Card>
+        )}
+
+        {runPlan && !draft && (
+          <div style={{
+            borderRadius: 22, padding: 18, marginBottom: 10, display: "flex", alignItems: "center", gap: 16,
+            background: `linear-gradient(135deg, ${C.primary}, ${C.accent})`, boxShadow: `0 8px 24px ${C.primaryGlow}`, color: "#fff",
+          }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 11.5, fontWeight: 800, letterSpacing: 1.2, opacity: 0.85 }}>HOY · NIVEL {info.level}</div>
+              <div style={{ fontSize: 30, fontWeight: 900, letterSpacing: -1 }}>{runKmToday} <span style={{ fontSize: 16, opacity: 0.85 }}>/ {runTarget} km</span></div>
+              <div style={{ fontSize: 12.5, fontWeight: 600, opacity: 0.9 }}>
+                {runKmToday >= runTarget ? "✅ Meta del día cumplida" : `Te faltan ${Math.round((runTarget - runKmToday) * 100) / 100} km`}
+                {info.nextKm > runTarget ? ` · en ${info.daysLeft} día${info.daysLeft === 1 ? "" : "s"} pasás a ${info.nextKm} km` : ""}
+              </div>
+              <div style={{ height: 8, borderRadius: 4, background: "rgba(255,255,255,0.25)", overflow: "hidden", marginTop: 10 }}>
+                <div style={{ width: `${pct * 100}%`, height: "100%", background: "#fff", borderRadius: 4 }} />
+              </div>
+            </div>
+            <button onClick={() => setRunPlanDraft({ ...RUN_DEFAULTS, ...runPlan })} aria-label="Editar plan" style={{ background: "rgba(255,255,255,0.2)", border: "none", borderRadius: 12, width: 36, height: 36, color: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <Pencil size={16} />
+            </button>
+          </div>
+        )}
+
+        <SectionTitle>{runLive ? (runLive.status === "running" ? "Corriendo 🟢" : "En pausa ⏸️") : "Nueva salida"}</SectionTitle>
+        <Card>
+          {runLive ? (
+            <>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, textAlign: "center", marginBottom: 12 }}>
+                <div><div style={big}>{liveKm.toFixed(2)}</div><div style={small}>KM</div></div>
+                <div><div style={big}>{fmtDur(liveSec)}</div><div style={small}>TIEMPO</div></div>
+                <div><div style={big}>{fmtPace(liveKm > 0.05 ? liveSec / liveKm : null)}</div><div style={small}>RITMO /KM</div></div>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, color: C.sub, fontWeight: 600, marginBottom: 10 }}>
+                <span>Ritmo actual: <b style={{ color: C.ink }}>{fmtPace(recentPace)}</b> /km</span>
+                <span>🔥 {runKcal(liveKm, bodyWeight)} kcal</span>
+                <span style={{ color: gpsInfo?.err ? C.red : gpsInfo?.acc > 25 ? C.amberInk : C.sub }}>
+                  {gpsInfo?.err ? "GPS ⚠️" : gpsInfo?.acc ? `GPS ±${gpsInfo.acc} m` : runLive.status === "running" ? "GPS…" : ""}
+                </span>
+              </div>
+              {gpsInfo?.err && <div style={{ background: C.amberSoft, color: C.amberInk, borderRadius: 10, padding: 10, fontSize: 12.5, fontWeight: 600, marginBottom: 10 }}>{gpsInfo.err}</div>}
+              <RouteSvg points={pts.map((p) => [p.lat, p.lon])} live={runLive.status === "running"} />
+              <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                {runLive.status === "running"
+                  ? <Btn kind="soft" onClick={runPause} style={{ ...ib, flex: 1 }}><Pause size={15} /> Pausa</Btn>
+                  : <Btn kind="soft" onClick={runResume} style={{ ...ib, flex: 1 }}><Play size={15} /> Seguir</Btn>}
+                <Btn onClick={runFinish} style={{ ...ib, flex: 1 }}><Square size={14} /> Terminar</Btn>
+                <Btn kind="danger" small onClick={runDiscard}><Trash2 size={15} /></Btn>
+              </div>
+            </>
+          ) : (
+            <>
+              <Btn onClick={runStart} style={{ ...ib, width: "100%", padding: "14px 0", fontSize: 16 }}><Footprints size={18} /> Empezar a correr con GPS</Btn>
+              <div style={{ fontSize: 12, color: C.sub, lineHeight: 1.45, marginTop: 8 }}>
+                Dejá la app abierta mientras corrés (la pantalla se mantiene prendida): en iPhone el GPS de una app web se corta si bloqueás el teléfono.
+              </div>
+              <div style={{ borderTop: `1px solid ${C.line}`, marginTop: 12, paddingTop: 12 }}>
+                <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 8 }}>O cargala a mano (cinta, otra app)</div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <Input type="number" placeholder="km" value={runManual.km} onChange={(e) => setRunManual({ ...runManual, km: e.target.value })} />
+                  <Input type="number" placeholder="minutos" value={runManual.min} onChange={(e) => setRunManual({ ...runManual, min: e.target.value })} />
+                  <Btn onClick={() => {
+                    const km = Number(String(runManual.km).replace(",", "."));
+                    const sec = Math.round((Number(runManual.min) || 0) * 60);
+                    if (!(km > 0)) { flash("Poné los km"); return; }
+                    up((s) => {
+                      s.running = s.running || { plan: null, runs: [] };
+                      s.running.runs = [...(s.running.runs || []), { id: uid(), date: today, startedAt: Date.now(), km, sec, splits: [], route: [], kcal: runKcal(km, bodyWeight), source: "manual" }];
+                      return s;
+                    });
+                    setRunManual({ km: "", min: "" });
+                  }}>＋</Btn>
+                </div>
+              </div>
+            </>
+          )}
+        </Card>
+
+        {runs.length > 0 && (
+          <>
+            <SectionTitle>Km por semana</SectionTitle>
+            <Card>
+              <BarChart data={weeksKm} unit="km" refLine={runPlan ? runTarget * 7 : 0} refLabel={runPlan ? `meta ${runTarget * 7} km/sem` : ""} />
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginTop: 12 }}>
+                {[[`${totalKm} km`, "TOTAL"], [runs.length, "SALIDAS"], [daysHit, "DÍAS CORRIDOS"]].map(([v, l]) => (
+                  <div key={l} style={{ background: C.soft, borderRadius: 12, padding: "10px 8px", textAlign: "center" }}>
+                    <div style={{ fontSize: 17, fontWeight: 900 }}>{v}</div><div style={small}>{l}</div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+
+            <SectionTitle>Historial</SectionTitle>
+            {[...runs].sort((a, b) => b.startedAt - a.startedAt).slice(0, 30).map((r) => {
+              const open = runOpen === r.id;
+              const hit = runPlan && r.date >= runPlan.startDate
+                ? runs.filter((x) => x.date === r.date).reduce((s, x) => s + x.km, 0) >= runTargetKm(runPlan, r.date) : false;
+              return (
+                <Card key={r.id} style={{ marginBottom: 8 }} onClick={() => setRunOpen(open ? null : r.id)}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <div style={{ width: 38, height: 38, borderRadius: 12, background: C.primarySoft, color: C.primary, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                      {r.source === "gps" ? <MapPin size={18} /> : <Footprints size={18} />}
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 800, fontSize: 15 }}>{r.km} km {hit && <span title="Meta del día cumplida">✅</span>}</div>
+                      <div style={{ fontSize: 12.5, color: C.sub, fontWeight: 600, textTransform: "capitalize" }}>
+                        {fmtDate(r.date)} · {r.sec ? `${fmtDur(r.sec)} · ${fmtPace(r.sec / r.km)} /km` : "sin tiempo"} · {r.kcal} kcal
+                      </div>
+                    </div>
+                  </div>
+                  {open && (
+                    <div style={{ marginTop: 12 }} onClick={(e) => e.stopPropagation()}>
+                      {r.route?.length > 1 && <RouteSvg points={r.route} height={160} />}
+                      {r.splits?.length > 0 && (
+                        <div style={{ marginTop: 10 }}>
+                          <div style={{ ...small, marginBottom: 4 }}>PARCIALES</div>
+                          {r.splits.map((s, i) => {
+                            const best = Math.min(...r.splits);
+                            return (
+                              <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 600, padding: "3px 0" }}>
+                                <span style={{ width: 40, color: C.sub }}>Km {i + 1}</span>
+                                <div style={{ flex: 1, height: 8, borderRadius: 4, background: C.line, overflow: "hidden" }}>
+                                  <div style={{ width: `${(best / s) * 100}%`, height: "100%", background: C.primary, borderRadius: 4 }} />
+                                </div>
+                                <span style={{ width: 44, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{fmtPace(s)}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                      <div style={{ textAlign: "right", marginTop: 8 }}>
+                        <Btn kind="danger" small style={ib} onClick={() => {
+                          if (!confirm("¿Borrar esta salida?")) return;
+                          up((s) => { s.running.runs = s.running.runs.filter((x) => x.id !== r.id); return s; });
+                        }}><Trash2 size={14} /> Borrar</Btn>
+                      </div>
+                    </div>
+                  )}
+                </Card>
+              );
+            })}
+          </>
+        )}
+      </>
+    );
+  }
+
   /* ============ DIETA ============ */
   const [newMeal, setNewMeal] = useState({ name: "", kcal: "", protein: "", carbs: "", fat: "" });
   const [saveToLib, setSaveToLib] = useState(false);
+  const [foodEst, setFoodEst] = useState(null); // resultado del estimador de kcal
+  const [bodyDraft, setBodyDraft] = useState({ neck: "", waist: "", hip: "", bf: "", muscle: "" });
+  const [weightView, setWeightView] = useState("dias"); // dias | meses
   const [newWeight, setNewWeight] = useState("");
   const [newMeas, setNewMeas] = useState({ waist: "", chest: "", arm: "" });
   const [calc, setCalc] = useState({ sex: "m", age: 18, height: 175, weight: 70, activity: 1.55, goal: 0 });
@@ -3920,10 +4829,29 @@ export default function App() {
   }
 
   function Dieta() {
-    const last = weightEntriesAll.slice(-14);
-    const vals = last.map(([, v]) => Number(v));
-    const min = Math.min(...vals), max = Math.max(...vals);
-    const range = max - min || 1;
+    const last = weightEntriesAll.slice(-30);
+    const months = monthly(state.weightLog);
+    // Composición corporal: % grasa de mediciones (cinta/balanza) + las del Plan Cut
+    const profile = { sex: "m", ...(state.profile || {}) };
+    const navyBf = navyBodyFat({ sex: profile.sex, height: profile.height, neck: bodyDraft.neck, waist: bodyDraft.waist, hip: bodyDraft.hip });
+    const bfLog = { ...((cut && cut.bfLog) || {}) };
+    Object.entries(state.bodyComp || {}).forEach(([d, v]) => { if (v && v.bf) bfLog[d] = v.bf; });
+    const weightAt = (d) => {
+      let w = 0;
+      for (const [k, v] of weightEntriesAll) { if (k <= d) w = Number(v); else break; }
+      return w || (weightEntriesAll[0] ? Number(weightEntriesAll[0][1]) : 0);
+    };
+    const comps = Object.keys(bfLog).sort().map((d) => {
+      const w = weightAt(d);
+      const c = composition(w, bfLog[d], (state.bodyComp || {})[d]?.muscle);
+      return c ? { d, bf: bfLog[d], w, c } : null;
+    }).filter(Boolean);
+    const latestComp = comps[comps.length - 1] || null;
+    const bfMonths = monthly(bfLog);
+    const compSeries = [
+      { name: "% grasa", color: C.amber, points: comps.map((x) => ({ x: x.d, y: x.bf })) },
+      { name: "% músculo", color: C.primary, points: comps.map((x) => ({ x: x.d, y: x.c.musclePct })) },
+    ];
 
     const bmr = calc.sex === "m"
       ? 10 * calc.weight + 6.25 * calc.height - 5 * calc.age + 5
@@ -3943,6 +4871,11 @@ export default function App() {
           <MacroBox label="Proteína" value={prot} goal={state.goals.protein} unit="g" color={C.primary} />
           <MacroBox label="Carbos" value={carbs} goal={state.goals.carbs} unit="g" color={C.blue} />
           <MacroBox label="Grasas" value={fat} goal={state.goals.fat} unit="g" color={C.red} />
+          {runKcalToday > 0 && (
+            <div style={{ gridColumn: "1 / -1", fontSize: 13, fontWeight: 600, color: C.sub, borderTop: `1px solid ${C.line}`, paddingTop: 10 }}>
+              🏃 Quemaste <b style={{ color: C.ink }}>{runKcalToday} kcal</b> corriendo · te quedan <b style={{ color: C.ink }}>{Math.max(0, state.goals.kcal + runKcalToday - kcal)} kcal</b> para hoy
+            </div>
+          )}
         </Card>
 
         {state.mealLibrary.length > 0 && (
@@ -3991,8 +4924,43 @@ export default function App() {
 
         <Card style={{ marginTop: 10 }}>
           <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>Registrar comida</div>
+          {fastNow.active && (
+            <div style={{ background: C.amberSoft, color: C.amberInk, borderRadius: 10, padding: 10, fontSize: 12.5, fontWeight: 600, marginBottom: 10 }}>
+              ⏳ Estás en ayuno hasta las {hhmm(fastNow.active.end)}. Si comiste igual, registralo: el conteo tiene que ser honesto.
+            </div>
+          )}
           <div style={{ display: "grid", gap: 8 }}>
-            <Input placeholder="Qué comiste (ej: milanesa con ensalada)" value={newMeal.name} onChange={(e) => setNewMeal({ ...newMeal, name: e.target.value })} />
+            <Input placeholder="Qué comiste (ej: 2 empanadas y una coca)" value={newMeal.name} onChange={(e) => { setNewMeal({ ...newMeal, name: e.target.value }); setFoodEst(null); }} />
+            <Btn kind="soft" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6 }} onClick={() => {
+              if (!newMeal.name.trim()) { flash("Escribí qué comiste para estimar"); return; }
+              const est = estimateFood(newMeal.name);
+              setFoodEst(est);
+              if (est.items.length) {
+                const t = est.total;
+                setNewMeal({ ...newMeal, kcal: String(t.kcal), protein: String(t.protein), carbs: String(t.carbs), fat: String(t.fat) });
+              }
+            }}><Sparkles size={15} /> Estimar kcal</Btn>
+            {foodEst && (
+              <div style={{ background: foodEst.items.length ? C.primarySoft : C.amberSoft, borderRadius: 12, padding: 10, fontSize: 13, fontWeight: 600, lineHeight: 1.5, color: foodEst.items.length ? C.primaryInk : C.amberInk }}>
+                {foodEst.items.map((it, i) => (
+                  <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                    <span style={{ textTransform: "capitalize" }}>{it.name} <span style={{ opacity: 0.75 }}>· {it.label}</span></span>
+                    <b>{it.kcal} kcal</b>
+                  </div>
+                ))}
+                {foodEst.items.length > 0 && (
+                  <div style={{ borderTop: `1px solid ${C.line}`, marginTop: 4, paddingTop: 4, display: "flex", justifyContent: "space-between" }}>
+                    <span>Estimado total</span><b>{foodEst.total.kcal} kcal</b>
+                  </div>
+                )}
+                {foodEst.unknown.length > 0 && (
+                  <div style={{ marginTop: 4, fontSize: 12.5 }}>
+                    No reconocí: <b>{foodEst.unknown.join(", ")}</b>. {foodEst.items.length ? "Sumalo a mano si hace falta." : "Poné las kcal directamente abajo."}
+                  </div>
+                )}
+                {foodEst.items.length > 0 && <div style={{ fontSize: 11.5, opacity: 0.8, marginTop: 4 }}>Porciones típicas. Podés escribir cantidades ("200 g de arroz", "3 huevos") y corregir los números abajo.</div>}
+              </div>
+            )}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
               <Input type="number" placeholder="kcal" value={newMeal.kcal} onChange={(e) => setNewMeal({ ...newMeal, kcal: e.target.value })} />
               <Input type="number" placeholder="proteína g" value={newMeal.protein} onChange={(e) => setNewMeal({ ...newMeal, protein: e.target.value })} />
@@ -4004,8 +4972,8 @@ export default function App() {
               Guardar como comida frecuente ⭐
             </label>
             <Btn onClick={() => {
-              if (!newMeal.name.trim()) return;
-              const meal = { ...newMeal, name: newMeal.name.trim() };
+              if (!newMeal.name.trim() && !Number(newMeal.kcal)) { flash("Escribí qué comiste o poné las kcal"); return; }
+              const meal = { ...newMeal, name: newMeal.name.trim() || "Comida" };
               up((s) => {
                 s.meals[today] = s.meals[today] || [];
                 s.meals[today].push({ id: uid(), ...meal });
@@ -4015,6 +4983,7 @@ export default function App() {
               });
               setNewMeal({ name: "", kcal: "", protein: "", carbs: "", fat: "" });
               setSaveToLib(false);
+              setFoodEst(null);
             }}>Agregar comida</Btn>
           </div>
         </Card>
@@ -4074,7 +5043,6 @@ export default function App() {
           <GoalInput label="proteína g" value={state.goals.protein} onChange={(v) => up((s) => { s.goals.protein = v; return s; })} />
           <GoalInput label="carbos g" value={state.goals.carbs} onChange={(v) => up((s) => { s.goals.carbs = v; return s; })} />
           <GoalInput label="grasas g" value={state.goals.fat} onChange={(v) => up((s) => { s.goals.fat = v; return s; })} />
-          <GoalInput label="vasos agua" value={state.goals.water} onChange={(v) => up((s) => { s.goals.water = v; return s; })} />
         </Card>
 
         <SectionTitle>Peso corporal</SectionTitle>
@@ -4082,36 +5050,140 @@ export default function App() {
           <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
             <Input type="number" placeholder="Tu peso hoy (kg)" value={newWeight} onChange={(e) => setNewWeight(e.target.value)} />
             <Btn onClick={() => {
-              const v = Number(newWeight);
+              const v = Number(String(newWeight).replace(",", "."));
               if (!v) return;
               up((s) => { s.weightLog[today] = v; return s; });
               setNewWeight("");
             }}>Guardar</Btn>
           </div>
-          {last.length >= 2 ? (
+          <div style={{ marginBottom: 12 }}>
+            <Segmented options={[["dias", "Últimos días"], ["meses", "Por mes"]]} value={weightView} onChange={setWeightView} />
+          </div>
+          {weightView === "dias" ? (
+            last.length >= 2
+              ? <TrendChart unit=" kg" series={[{ name: "Peso", color: C.primary, points: last.map(([d, v]) => ({ x: d, y: Number(v) })) }]} />
+              : <div style={{ fontSize: 13, color: C.sub }}>Registrá tu peso al menos 2 días para ver el gráfico. También se usa en el análisis de fuerza y en las kcal de correr.</div>
+          ) : months.length ? (
             <>
-              <svg viewBox="0 0 300 80" style={{ width: "100%", height: 80 }}>
-                <polyline fill="none" stroke={C.primary} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
-                  points={last.map(([, v], i) => {
-                    const x = (i / (last.length - 1)) * 290 + 5;
-                    const y = 70 - ((Number(v) - min) / range) * 55;
-                    return `${x},${y}`;
-                  }).join(" ")} />
-                {last.map(([, v], i) => {
-                  const x = (i / (last.length - 1)) * 290 + 5;
-                  const y = 70 - ((Number(v) - min) / range) * 55;
-                  return <circle key={i} cx={x} cy={y} r="3" fill={C.primary} />;
+              <BarChart unit="kg" fmt={(v) => v.toLocaleString("es-AR")}
+                data={months.slice(-8).map((m, i, arr) => {
+                  const prev = i > 0 ? arr[i - 1].avg : null;
+                  const delta = prev != null ? Math.round((m.avg - prev) * 10) / 10 : null;
+                  return {
+                    label: MONTHS[Number(m.ym.slice(5)) - 1].slice(0, 3), title: ymLabel(m.ym), value: m.avg,
+                    note: delta == null ? `${m.n} pesada${m.n === 1 ? "" : "s"}` : `${delta > 0 ? "+" : ""}${delta} kg vs mes anterior`,
+                  };
+                })} />
+              <div style={{ marginTop: 12 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr 1fr 1fr", fontSize: 11, fontWeight: 800, color: C.sub, letterSpacing: 0.3, padding: "4px 0" }}>
+                  <span>MES</span><span style={{ textAlign: "right" }}>PESO</span><span style={{ textAlign: "right" }}>CAMBIO</span><span style={{ textAlign: "right" }}>% GRASA</span>
+                </div>
+                {months.slice(-6).reverse().map((m) => {
+                  const idx = months.indexOf(m);
+                  const prev = idx > 0 ? months[idx - 1].avg : null;
+                  const delta = prev != null ? Math.round((m.avg - prev) * 10) / 10 : null;
+                  const bfM = bfMonths.find((b) => b.ym === m.ym);
+                  return (
+                    <div key={m.ym} style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr 1fr 1fr", fontSize: 13, fontWeight: 600, padding: "6px 0", borderTop: `1px solid ${C.line}` }}>
+                      <span style={{ color: C.sub }}>{ymLabel(m.ym).split(" ")[0]}</span>
+                      <span style={{ textAlign: "right", fontWeight: 800 }}>{m.avg} kg</span>
+                      <span style={{ textAlign: "right" }}>{delta == null ? "–" : `${delta > 0 ? "▲ +" : delta < 0 ? "▼ " : ""}${delta} kg`}</span>
+                      <span style={{ textAlign: "right" }}>{bfM ? `${bfM.avg} %` : "–"}</span>
+                    </div>
+                  );
                 })}
-              </svg>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: C.sub, fontWeight: 600 }}>
-                <span>{last[0][0].slice(5)}</span>
-                <span style={{ color: C.ink, fontWeight: 800 }}>Último: {last[last.length - 1][1]} kg</span>
-                <span>{last[last.length - 1][0].slice(5)}</span>
               </div>
             </>
           ) : (
-            <div style={{ fontSize: 13, color: C.sub }}>Registrá tu peso al menos 2 días para ver el gráfico. También se usa en el análisis de fuerza del mapa muscular.</div>
+            <div style={{ fontSize: 13, color: C.sub }}>Todavía no hay pesadas registradas.</div>
           )}
+        </Card>
+
+        <SectionTitle>Grasa y músculo</SectionTitle>
+        <Card>
+          {latestComp ? (
+            <>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 12 }}>
+                {[
+                  [`${latestComp.bf} %`, "GRASA", `${latestComp.c.fatKg} kg`],
+                  [`${latestComp.c.musclePct} %`, latestComp.c.muscleEstimated ? "MÚSCULO*" : "MÚSCULO", `${latestComp.c.muscleKg} kg`],
+                  [`${latestComp.c.leanKg} kg`, "MASA MAGRA", `de ${latestComp.w} kg`],
+                ].map(([v, l, sub]) => (
+                  <div key={l} style={{ background: C.soft, borderRadius: 12, padding: "10px 6px", textAlign: "center" }}>
+                    <div style={{ fontSize: 18, fontWeight: 900, letterSpacing: -0.4 }}>{v}</div>
+                    <div style={{ fontSize: 10.5, fontWeight: 800, color: C.sub, letterSpacing: 0.4 }}>{l}</div>
+                    <div style={{ fontSize: 11.5, fontWeight: 600, color: C.sub }}>{sub}</div>
+                  </div>
+                ))}
+              </div>
+              {/* barra de composición: grasa vs masa magra */}
+              <div style={{ display: "flex", height: 12, borderRadius: 6, overflow: "hidden", gap: 2, marginBottom: 6 }}>
+                <div style={{ width: `${latestComp.bf}%`, background: C.amber }} />
+                <div style={{ flex: 1, background: C.primary }} />
+              </div>
+              <div style={{ display: "flex", gap: 14, fontSize: 12, fontWeight: 700, color: C.sub, marginBottom: 12 }}>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: C.amber }} />Grasa</span>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: C.primary }} />Masa magra (músculo, huesos, agua)</span>
+              </div>
+              {compSeries[0].points.length >= 2 && <TrendChart unit=" %" series={compSeries} />}
+            </>
+          ) : (
+            <div style={{ fontSize: 13, color: C.sub, lineHeight: 1.45, marginBottom: 10 }}>
+              Cargá tus medidas con cinta (cuello y cintura) o los números de una balanza de bioimpedancia para ver tu % de grasa y músculo mes a mes.
+            </div>
+          )}
+
+          <div style={{ borderTop: `1px solid ${C.line}`, paddingTop: 12, marginTop: 4 }}>
+            <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 8 }}>Medición de hoy</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+              <div>
+                <div style={lblStyle}>Sexo</div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  {[["m", "Hombre"], ["f", "Mujer"]].map(([v, l]) => (
+                    <button key={v} onClick={() => up((s) => { s.profile = { ...(s.profile || {}), sex: v }; return s; })} style={{
+                      flex: 1, padding: "9px 0", borderRadius: 10, border: "none", cursor: "pointer", fontFamily: FONT, fontWeight: 700, fontSize: 13,
+                      background: profile.sex === v ? C.primarySoft : C.soft, color: profile.sex === v ? C.primaryInk : C.sub,
+                    }}>{l}</button>
+                  ))}
+                </div>
+              </div>
+              <LabeledNum label="Altura (cm)" value={profile.height || ""} onChange={(v) => up((s) => { s.profile = { ...(s.profile || {}), height: v }; return s; })} />
+              <LabeledNum label="Cuello (cm)" step={0.5} value={bodyDraft.neck} onChange={(v) => setBodyDraft({ ...bodyDraft, neck: v })} />
+              <LabeledNum label="Cintura al ombligo (cm)" step={0.5} value={bodyDraft.waist} onChange={(v) => setBodyDraft({ ...bodyDraft, waist: v })} />
+              {profile.sex === "f" && <LabeledNum label="Cadera (cm)" step={0.5} value={bodyDraft.hip} onChange={(v) => setBodyDraft({ ...bodyDraft, hip: v })} />}
+            </div>
+            {navyBf != null && (
+              <div style={{ background: C.primarySoft, color: C.primaryInk, borderRadius: 10, padding: 10, fontSize: 13, fontWeight: 600, marginBottom: 8 }}>
+                Con la cinta te da <b>{navyBf} % de grasa</b> (método Navy, ±3 %).
+              </div>
+            )}
+            <div style={{ fontSize: 12, color: C.sub, fontWeight: 600, margin: "4px 0 6px" }}>¿Tenés balanza con bioimpedancia? Poné sus valores (opcional, pisan la cinta):</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
+              <LabeledNum label="% grasa (balanza)" step={0.1} value={bodyDraft.bf} onChange={(v) => setBodyDraft({ ...bodyDraft, bf: v })} />
+              <LabeledNum label="% músculo (balanza)" step={0.1} value={bodyDraft.muscle} onChange={(v) => setBodyDraft({ ...bodyDraft, muscle: v })} />
+            </div>
+            <Btn style={{ width: "100%" }} onClick={() => {
+              const bf = Number(bodyDraft.bf) || navyBf;
+              if (!bf) { flash("Poné cuello y cintura (y tu altura), o el % de grasa de la balanza"); return; }
+              if (!bodyWeight) { flash("Registrá tu peso primero (arriba)"); return; }
+              up((s) => {
+                s.bodyComp = s.bodyComp || {};
+                s.bodyComp[today] = {
+                  bf: Math.round(bf * 10) / 10, muscle: Number(bodyDraft.muscle) || null,
+                  neck: Number(bodyDraft.neck) || null, waist: Number(bodyDraft.waist) || null, hip: Number(bodyDraft.hip) || null,
+                  method: Number(bodyDraft.bf) ? "balanza" : "cinta",
+                };
+                // si está el Plan Cut, también sube de nivel con esta medición
+                if (s.cut) { s.cut.bfLog = s.cut.bfLog || {}; s.cut.bfLog[today] = Math.round(bf * 10) / 10; }
+                return s;
+              });
+              setBodyDraft({ neck: "", waist: "", hip: "", bf: "", muscle: "" });
+              flash(`📊 Guardado: ${Math.round(bf * 10) / 10} % de grasa`);
+            }}>Guardar medición</Btn>
+            <div style={{ fontSize: 11.5, color: C.sub, lineHeight: 1.45, marginTop: 8 }}>
+              Medí siempre en ayunas, a la misma hora, 1 vez cada 2–4 semanas. *El % de músculo sin balanza es una estimación (≈53 % de tu masa magra).
+            </div>
+          </div>
         </Card>
 
         <SectionTitle>Medidas corporales</SectionTitle>
@@ -4952,9 +6024,11 @@ export default function App() {
 
   const tabs = [
     { id: "gym", label: "Gym", Icon: Dumbbell },
+    { id: "correr", label: "Correr", Icon: Footprints },
     { id: "agenda", label: "Agenda", Icon: Calendar },
     { id: "bonus", label: "Bonus", Icon: Lightbulb },
     { id: "hoy", label: "Hoy", Icon: Sun },
+    { id: "salud", label: "Salud", Icon: HeartPulse },
     { id: "habitos", label: "Hábitos", Icon: Target },
     { id: "dieta", label: "Dieta", Icon: Salad },
     { id: "plata", label: "Plata", Icon: Wallet },
@@ -5141,10 +6215,12 @@ export default function App() {
         style={{ maxWidth: 520, margin: "0 auto", padding: "calc(14px + env(safe-area-inset-top)) 14px 116px" }}>
         <div key={tab} style={{ animation: "norteFadeUp 0.34s cubic-bezier(0.22,1,0.36,1) both" }}>
           {tab === "hoy" && Hoy()}
+          {tab === "salud" && Salud()}
           {tab === "agenda" && Agenda()}
           {tab === "bonus" && Bonus()}
           {tab === "habitos" && Habitos()}
           {tab === "gym" && Gym()}
+          {tab === "correr" && Correr()}
           {tab === "dieta" && Dieta()}
           {tab === "plata" && Finanzas()}
           {tab === "mas" && Mas()}
