@@ -67,7 +67,8 @@
     "lint": "expo lint",
     "typecheck": "tsc --noEmit",
     "build:web": "expo export --platform web && node scripts/postexport-web.js",
-    "deploy:web": "expo export --platform web && wrangler deploy"
+    "deploy:web": "expo export --platform web && wrangler deploy",
+    "build": "npm run build:web"
   },
   "private": true
 }
